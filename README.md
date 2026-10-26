@@ -28,3 +28,7 @@ It also add native bridges to other protocols like:
   - Let the admins to let their users to cross-share with classic network to attract new users into the Fediverse
   - Add the ability to live stream into the Fediverse
   - And by passion !
+
+
+## Used on my own instance (As October 2026, it uses old deprecated code)
+https://instavox.social/
