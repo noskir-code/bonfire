@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /home/noskir/Documents/Rust/bonfire && sed -n 1,80p ref/templates/base.html; echo ----; sed -n 1,40p ref/templates/index.html; echo ----; sed -n 1,60p ref/assets/style.css; ls ~/.cargo/registry/src/*/ | grep -E \"^\\(askama|sqlx|axum|tower-sessions|jzon|tower-http\\)-[0-9]\" )",
+      "Read(//home/noskir/.cargo/registry/src/**)",
+      "Bash(cd ~/.cargo/registry/src/*/ && sed -n '/^\\\\[features\\\\]/,/^\\\\[/p' sqlx-0.9.0/Cargo.toml | head -60; echo ----; grep -nE \"^pub use|^pub mod\" tower-sessions-0.15.0/src/lib.rs; sed -n '/^\\\\[features\\\\]/,/^\\\\[/p' tower-sessions-0.15.0/Cargo.toml; echo ---; grep -n \"fn render\\\\b\\\\|fn render\\(\" askama-0.16.1/src/lib.rs | head)",
+      "Bash(cargo build *)"
+    ],
+    "additionalDirectories": [
+      "/home/noskir/Documents/Rust/bonfire/tower-sessions-0.15.0"
+    ]
+  }
+}
