@@ -1,2 +1,30 @@
 # Bonfire
-Multi-typed Fediverse protocol written in Rust, built over the crate activitypub_federation and created to make any kind of services or combine them for only one account usage.
+Multi-typed Fediverse protocol written in Rust, created to make any kind of services or combine them for only one account usage.
+
+
+It gives the admin to choose the types of services they wants to mainly focus on:
+ - Macro Blogging
+ - Image sharing
+ - Video
+ - Audio streaming
+ - Content Aggregator
+ - Publishing (Blogging)
+ - Event planning
+ - Distributed Friends & Relations Network
+
+
+It also add native bridges to other protocols like:
+ - AT Protocol
+ - diaspora
+ - Matrix
+ - ZOT
+
+
+## Why ???
+ For multiple reasons:
+  - Cost-effective since it is written in Rust
+  - The ability to have all the accounts associated with one user instead of fragmenting all the followers into multiple services
+  - The ability to share easily with multiple content types
+  - Let the admins to let their users to cross-share with classic network to attract new users into the Fediverse
+  - Add the ability to live stream into the Fediverse
+  - And by passion !
