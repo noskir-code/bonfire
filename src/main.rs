@@ -1,4 +1,4 @@
-use axum::{Router, extract::DefaultBodyLimit};
+use axum::{Router, extract::DefaultBodyLimit, routing::post};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -6,9 +6,11 @@ use tower_sessions::{
     Expiry, MemoryStore, SessionManagerLayer,
     cookie::{SameSite, time::Duration},
 };
+mod entities;
 mod handlers;
 mod pages;
 mod settings;
+use handlers::user;
 use settings::Config;
 
 /// Shared state given to every handler.
@@ -66,7 +68,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let session_layer = SessionManagerLayer::new(MemoryStore::default())
+    if let Some(pool) = &pool
+        && let Err(err) = entities::user::ensure_schema(pool).await
+    {
+        tracing::error!("failed to create the database schema: {}", err);
+    }
+
+    let session_layer =SessionManagerLayer::new(MemoryStore::default())
         .with_secure(config.secure_cookies)
         .with_http_only(true)
         .with_same_site(SameSite::Lax)
@@ -76,6 +84,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .merge(pages::page_routes())
+        .route("/settings/names", post(user::update_names))
+        .route("/settings/username", post(user::update_username))
+        .route("/settings/photo", post(user::upload_photo))
+        .route("/settings/photo/remove", post(user::remove_photo))
+        .route("/settings/background", post(user::upload_background))
+        .route("/settings/background/remove", post(user::remove_background));
+
+    #[cfg(debug_assertions)]
+    let app = app.route(
+        "/dev/login/{username}",
+        axum::routing::get(handlers::session::dev_login),
+    );
+
+    let app = app
         .nest_service("/assets", ServeDir::new("assets"))
         .nest_service("/public", ServeDir::new("public"))
         .layer(TraceLayer::new_for_http())

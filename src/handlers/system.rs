@@ -10,6 +10,22 @@ struct IndexTemplate {
     title: String,
 }
 
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorTemplate<'a> {
+    title: String,
+    message: &'a str,
+}
+
+/// Error page keeping the site layout.
+pub fn error_page(status: StatusCode, message: &str) -> Response {
+    let template = ErrorTemplate {
+        title: status.canonical_reason().unwrap_or("Error").to_string(),
+        message,
+    };
+    (status, render_template(&template)).into_response()
+}
+
 pub fn render_template<T: Template>(template: &T) -> Response {
     match template.render() {
         Ok(html) => Html(html).into_response(),

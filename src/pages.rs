@@ -6,7 +6,10 @@ use axum::{
     routing::get,
 };
 
-use crate::{AppState, handlers::system};
+use crate::{
+    AppState,
+    handlers::{system, user},
+};
 
 fn json_response(status: StatusCode, body: jzon::JsonValue) -> Response {
     (status, [(CONTENT_TYPE, "application/json")], body.dump()).into_response()
@@ -44,4 +47,5 @@ pub fn page_routes() -> Router<AppState> {
         .route("/", get(system::index))
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
+        .route("/user/{username}", get(user::user_page))
 }
