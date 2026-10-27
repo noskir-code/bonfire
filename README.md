@@ -32,3 +32,7 @@ It also add native bridges to other protocols like:
 
 ## Used on my own instance (As October 2026, it uses old deprecated code)
 https://instavox.social/
+
+
+### Current version:
+ - 0.0.2
