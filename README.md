@@ -30,7 +30,7 @@ It also add native bridges to other protocols like:
   - And by passion !
 
 
-### Used on my own instance (As October 2026, it uses old deprecated code)
+### Used on my own instance (As October 2026, it uses old deprecated code that is used as a reference for this project)
 https://instavox.social/
 
 
