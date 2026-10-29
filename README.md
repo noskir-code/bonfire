@@ -30,9 +30,22 @@ It also add native bridges to other protocols like:
   - And by passion !
 
 
-## Used on my own instance (As October 2026, it uses old deprecated code)
+### Used on my own instance (As October 2026, it uses old deprecated code that is used as a reference for this project)
 https://instavox.social/
 
 
 ### Current version:
  - 0.0.2
+
+## Roadmap to the v1
+
+ - (Current step) 0.1 > the first fully operational function (Content-Aggregator)
+ - 0.2 > DFRN
+ - 0.3 > Macro blogging
+ - 0.4 > Image
+ - 0.5 > Publishing
+ - 0.6 > Audio streaming
+ - 0.7 > Event planning
+ - 0.8 > Video
+ - 0.9 > Live Streaming
+ - 0.10 > CLI configuration
