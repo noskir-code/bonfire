@@ -42,17 +42,19 @@ body {
 header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0.75em 1em;
-    background-color: var(--main);
+    padding: 2em 1em;
 }
 
-header .title {
+header div {
+    font-size: 2em;
+}
+
+/*header .title {
     font-size: 1.4em;
     font-weight: bold;
     color: var(--text);
     text-decoration: none;
-}
+}*/
 
 .button {
     display: inline-block;
@@ -71,6 +73,23 @@ main {
     padding: 1em;
 }
 
+nav {
+    height: 100%;
+    width: 100%;
+}
+
+nav a {
+    display: block;
+    text-decoration: none;
+    color: var(--text-button);
+    padding: 1em;
+    width: 100%;
+}
+
+nav a:hover {
+    background-color: var(--button);
+}
+
 .box {
     padding: 1em 1.5em;
     border-radius: 0.5em;
@@ -86,6 +105,109 @@ footer {
 .error {
     color: hsl(0, 70%, 45%);
 }
+
+/*
+    Basic
+*/
+
+.header {
+    display: flex;
+    align-items: flex-start;
+    flex-direction: row;
+    padding: 0.75em 1em;
+    background-color: var(--main);
+    position: fixed;
+    /*height: 100vh;*/
+    width: 100%;
+}
+
+.flex {
+    display: flex;
+}
+
+.right {
+    align-items: flex-end;
+}
+
+.center {
+    align-items: center;
+}
+
+.content {
+    width: 60%;
+}
+
+.bottom {
+    justify-content: end;
+}
+
+.margin {
+    margin: 2em 0em;
+}
+
+.full-height {
+    height: 100%;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.space-between {
+    justify-content: space-between;
+}
+
+.grid {
+    display: grid;
+}
+
+.grid.horizontal {
+    grid-auto-flow: column;
+}
+
+.grid.vertical {
+    grid-auto-flow: row;
+}
+
+.grid.page {
+    grid-template-columns: max-content auto;
+}
+
+.vertical {
+    flex-flow: column;
+}
+
+div .small.text {
+    font-size: 0.8em;
+}
+
+.side.infos {
+    height: 100vh;
+    position: fixed;
+    background-color: var(--main);
+    width: 14em;
+}
+
+.wrap {
+    flex-wrap: wrap;
+}
+
+.space-around {
+    justify-content: space-around;
+}
+
+.space-between {
+    justify-content: space-between;
+}
+
+.infos a{
+    color: var(--text);
+}
+
+.logo {
+    width: 2em;
+}
+
 
 /*
 Profile

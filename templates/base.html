@@ -4,21 +4,41 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{% block title %}{{ title }} - Bonfire{% endblock %}</title>
+        <link rel="shortcut icon" href="/public/favicon.ico" type="image/x-icon">
         {% block stylesheets %}
         <link rel="stylesheet" href="/assets/style.css" />
         {% endblock %}
     </head>
     <body>
-        <header>
-            <a href="/" class="title">Bonfire</a>
-            <nav>
-                <a href="/" class="button">Home</a>
-            </nav>
-        </header>
-        <main>{% block content %}{% endblock %}</main>
-        <footer>
-            <p>Bonfire &middot; a multi-service Fediverse instance</p>
-            <i>V0.0.2</i>
-        </footer>
+        <div class="grid horizontal page">
+            <div class="flex full height center side infos vertical">
+                <header><img src="/public/favicon.ico" alt="Logo" class="logo"><div>Bonfire</div></header>
+                <nav>
+                    <a href="user.html"><img src="" alt="photo">You</a>
+                    <a href="/">Home</a>
+                    <a href="your-feed">Feed</a>
+                    <a href="communities">Communities</a>
+                    <a href="messenger">Messenger</a>
+                    <a href="settings">Settings</a>
+                </nav>
+                <div class="flex bottom center vertical">
+                    <div>Bonfire Protocol &middot v.0.0.3</div>
+                    <div class="flex wrap space-around infos">
+                        <a href="terms-of-use">&bull;Terms of Use</a>
+                        <a href="privacy-policy">&bull;Privacy Policy</a>
+                        <a href="cookies">&bull;Cookies</a>
+                        <a href="rules">&bull;Server rules</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex center full-width vertical content margin">
+            <div>
+                <input type="search" placeholder="Search...">
+                <button>Mag</button>
+            </div>
+            {% block content %}
+            {% endblock %}
+        </div>
     </body>
 </html>
