@@ -1,0 +1,31 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content auth">
+    <h1>Login</h1>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+
+    <form action="/login" method="post">
+        <label for="login">Username or email</label>
+        <input
+            id="login"
+            type="text"
+            name="login"
+            value="{{ login }}"
+            autocomplete="username"
+            required
+            autofocus
+        />
+        <label for="password">Password</label>
+        <input
+            id="password"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            required
+        />
+        <button type="submit" class="button">Login</button>
+    </form>
+    <p>No account yet? <a href="/register">Register</a></p>
+</section>
+{% endblock %}

@@ -16,7 +16,7 @@ use crate::{
     handlers::{
         image::{self, IMAGE_FIELD, ImageError, MAX_IMAGE_BYTES},
         session::current_user_id,
-        system::{error_page, render_template},
+        system::{Layout, error_page, render_template},
     },
 };
 
@@ -104,6 +104,7 @@ fn server_error(err: sqlx::Error) -> EditError {
 #[template(path = "user.html")]
 struct UserTemplate {
     title: String,
+    layout: Layout,
     user: User,
     is_own_profile: bool,
     error: Option<String>,
@@ -118,20 +119,25 @@ pub async fn user_page(
     Path(username): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
+    let layout = Layout::load(&state, &session).await;
     let Some(pool) = &state.pool else {
-        return error_page(StatusCode::SERVICE_UNAVAILABLE, "The database is not configured.");
+        return error_page(layout, StatusCode::SERVICE_UNAVAILABLE, "The database is not configured.");
     };
 
     let user = match user::find_by_username(pool, &username).await {
         Ok(Some(user)) => user,
-        Ok(None) => return error_page(StatusCode::NOT_FOUND, "This user does not exist."),
+        Ok(None) => return error_page(layout, StatusCode::NOT_FOUND, "This user does not exist."),
         Err(err) => {
             tracing::error!("failed to load user {}: {}", username, err);
-            return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load this user.");
+            return error_page(
+                layout,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load this user.",
+            );
         }
     };
 
-    let is_own_profile = current_user_id(&session).await == Some(user.id);
+    let is_own_profile = layout.viewer.as_ref().is_some_and(|viewer| viewer.id == user.id);
     let error = query
         .get("error")
         .and_then(|code| EditError::from_code(code))
@@ -140,6 +146,7 @@ pub async fn user_page(
 
     let template = UserTemplate {
         title: format!("{} (@{})", user.display_name(), user.username),
+        layout,
         user,
         is_own_profile,
         error,
@@ -151,11 +158,17 @@ pub async fn user_page(
 }
 
 /// Database pool and signed-in user, or the response to send instead.
+/// Error pages use an empty layout since there is no valid signed-in user.
 async fn signed_in_user(state: &AppState, session: &Session) -> Result<(PgPool, User), Response> {
     let Some(pool) = state.pool.clone() else {
-        return Err(error_page(StatusCode::SERVICE_UNAVAILABLE, "The database is not configured."));
+        return Err(error_page(
+            Layout::default(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The database is not configured.",
+        ));
     };
-    let not_signed_in = || error_page(StatusCode::UNAUTHORIZED, "You need to be signed in.");
+    let not_signed_in =
+        || error_page(Layout::default(), StatusCode::UNAUTHORIZED, "You need to be signed in.");
 
     let Some(user_id) = current_user_id(session).await else {
         return Err(not_signed_in());
@@ -165,7 +178,11 @@ async fn signed_in_user(state: &AppState, session: &Session) -> Result<(PgPool, 
         Ok(None) => Err(not_signed_in()),
         Err(err) => {
             tracing::error!("failed to load signed-in user {}: {}", user_id, err);
-            Err(error_page(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load your profile."))
+            Err(error_page(
+                Layout::default(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load your profile.",
+            ))
         }
     }
 }

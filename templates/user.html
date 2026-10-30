@@ -1,5 +1,5 @@
 {% extends "base.html" %} {% block content %}
-<section class="box profile">
+<section class="box content profile">
     <div class="profile-background">
         {% if let Some(url) = user.background_url %}
         <img src="{{ url }}" alt="Background of @{{ user.username }}" />
@@ -19,7 +19,7 @@
 </section>
 
 {% if is_own_profile %}
-<section class="box profile-edit">
+<section class="box content profile-edit">
     <h2>Edit profile</h2>
     {% if let Some(message) = error %}
     <p class="error">{{ message }}</p>

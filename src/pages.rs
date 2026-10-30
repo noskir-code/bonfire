@@ -1,43 +1,42 @@
 use axum::{
-    Router,
+    Json, Router,
     extract::State,
-    http::{StatusCode, header::CONTENT_TYPE},
+    http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
+use serde_json::json;
 
 use crate::{
     AppState,
-    handlers::{system, user},
+    handlers::{auth, system, user},
 };
 
-fn json_response(status: StatusCode, body: jzon::JsonValue) -> Response {
-    (status, [(CONTENT_TYPE, "application/json")], body.dump()).into_response()
-}
-
 async fn health_live() -> Response {
-    json_response(StatusCode::OK, jzon::object! { status: "ok" })
+    (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response()
 }
 
 async fn health_ready(State(state): State<AppState>) -> Response {
     let Some(pool) = state.pool else {
-        return json_response(
+        return (
             StatusCode::SERVICE_UNAVAILABLE,
-            jzon::object! { status: "no database configured" },
-        );
+            Json(json!({ "status": "no database configured" })),
+        )
+            .into_response();
     };
 
     match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)
         .await
     {
-        Ok(_) => json_response(StatusCode::OK, jzon::object! { status: "ready" }),
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response(),
         Err(err) => {
             tracing::warn!("health readiness check failed: {}", err);
-            json_response(
+            (
                 StatusCode::SERVICE_UNAVAILABLE,
-                jzon::object! { status: "unavailable" },
+                Json(json!({ "status": "unavailable" })),
             )
+                .into_response()
         }
     }
 }
@@ -48,4 +47,7 @@ pub fn page_routes() -> Router<AppState> {
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/user/{username}", get(user::user_page))
+        .route("/login", get(auth::login_page).post(auth::login))
+        .route("/register", get(auth::register_page).post(auth::register))
+        .route("/logout", post(auth::logout))
 }

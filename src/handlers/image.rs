@@ -27,8 +27,6 @@ pub enum ImageError {
 fn detect_extension(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("jpg")
-    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some("jpeg")
     } else if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         Some("png")
     } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {

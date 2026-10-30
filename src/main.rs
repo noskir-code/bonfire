@@ -69,9 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(pool) = &pool
-        && let Err(err) = entities::user::ensure_schema(pool).await
+        && let Err(err) = sqlx::migrate!().run(pool).await
     {
-        tracing::error!("failed to create the database schema: {}", err);
+        tracing::error!("failed to run database migrations: {}", err);
     }
 
     let session_layer =SessionManagerLayer::new(MemoryStore::default())
@@ -89,13 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/settings/photo", post(user::upload_photo))
         .route("/settings/photo/remove", post(user::remove_photo))
         .route("/settings/background", post(user::upload_background))
-        .route("/settings/background/remove", post(user::remove_background));
-
-    #[cfg(debug_assertions)]
-    let app = app.route(
-        "/dev/login/{username}",
-        axum::routing::get(handlers::session::dev_login),
-    );
+        .route("/settings/background/remove", post(user::remove_background))
+        .fallback(handlers::system::not_found);
 
     let app = app
         .nest_service("/assets", ServeDir::new("assets"))

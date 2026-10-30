@@ -1,0 +1,84 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content auth">
+    <h1>Register</h1>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+
+    <form action="/register" method="post">
+        <label for="username">Username</label>
+        <input
+            id="username"
+            type="text"
+            name="username"
+            value="{{ username }}"
+            maxlength="{{ username_max_len }}"
+            pattern="[A-Za-z0-9_]+"
+            autocomplete="username"
+            required
+        />
+        <label for="email">Email</label>
+        <input
+            id="email"
+            type="email"
+            name="email"
+            value="{{ email }}"
+            maxlength="{{ email_max_len }}"
+            autocomplete="email"
+            required
+        />
+        <label for="firstname">First name</label>
+        <input
+            id="firstname"
+            type="text"
+            name="firstname"
+            value="{{ firstname }}"
+            maxlength="{{ name_max_chars }}"
+            autocomplete="given-name"
+            required
+        />
+        <label for="lastname">Last name</label>
+        <input
+            id="lastname"
+            type="text"
+            name="lastname"
+            value="{{ lastname }}"
+            maxlength="{{ name_max_chars }}"
+            autocomplete="family-name"
+            required
+        />
+        <label for="birthday">Birthday</label>
+        <input
+            id="birthday"
+            type="date"
+            name="birthday"
+            value="{{ birthday }}"
+            max="{{ today }}"
+            autocomplete="bday"
+            required
+        />
+        <label for="password">Password</label>
+        <input
+            id="password"
+            type="password"
+            name="password"
+            minlength="{{ password_min_chars }}"
+            maxlength="{{ password_max_chars }}"
+            autocomplete="new-password"
+            required
+        />
+        <label for="password_confirm">Confirm password</label>
+        <input
+            id="password_confirm"
+            type="password"
+            name="password_confirm"
+            minlength="{{ password_min_chars }}"
+            maxlength="{{ password_max_chars }}"
+            autocomplete="new-password"
+            required
+        />
+        <button type="submit" class="button">Create account</button>
+    </form>
+    <p>Already have an account? <a href="/login">Login</a></p>
+</section>
+{% endblock %}

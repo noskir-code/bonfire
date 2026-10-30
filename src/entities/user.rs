@@ -3,19 +3,25 @@ use sqlx::{PgPool, Row, postgres::PgRow, types::chrono::NaiveDate};
 pub const USERNAME_MIN_LEN: usize = 3;
 pub const USERNAME_MAX_LEN: usize = 30;
 pub const NAME_MAX_CHARS: usize = 64;
+pub const EMAIL_MAX_LEN: usize = 254;
+pub const PASSWORD_MIN_CHARS: usize = 10;
+/// Argon2 accepts more, this only stops absurdly long inputs.
+pub const PASSWORD_MAX_CHARS: usize = 128;
+pub const MIN_AGE_YEARS: u32 = 13;
+pub const MAX_AGE_YEARS: u32 = 130;
 
 #[derive(Clone, Debug)]
 pub struct User {
     pub id: i32,
-    /// Case is kept, but unique ignoring case, see `ensure_schema`.
+    /// Case is kept, but unique ignoring case, see `migrations/`.
     pub username: String,
     /// Name shown on the profile, can be empty.
     pub displayname: String,
     pub firstname: String,
     pub lastname: String,
-    // Not displayed or edited yet, it will be set at signup.
+    /// Asked at signup, `None` for accounts created before that. Not displayed or edited yet.
     #[allow(dead_code)]
-    pub birthday: NaiveDate,
+    pub birthday: Option<NaiveDate>,
     pub photo_url: Option<String>,
     pub background_url: Option<String>,
 }
@@ -89,34 +95,6 @@ impl ProfileImage {
     }
 }
 
-pub async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL,
-            displayname TEXT NOT NULL DEFAULT '',
-            firstname TEXT NOT NULL DEFAULT '',
-            lastname TEXT NOT NULL DEFAULT '',
-            birthday DATE NOT NULL DEFAULT NOW(),
-            photo_url TEXT,
-            background_url TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Like Mastodon: "Alice" and "alice" can't both exist.
-    sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username))",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// Checks the username only uses `A-Z`, `a-z`, `0-9` and `_`. Case is kept.
 pub fn validate_username(raw: &str) -> Option<String> {
     let username = raw.trim();
@@ -135,17 +113,123 @@ pub fn validate_name(raw: &str) -> Option<String> {
     valid.then(|| name.to_string())
 }
 
-// Only used by the dev login until signup is written.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
-pub async fn create(pool: &PgPool, username: &str) -> Result<User, sqlx::Error> {
-    let row = sqlx::query(
-        "INSERT INTO users (username) VALUES ($1)
+/// Lowercases the email and checks it looks like `name@domain.tld`.
+/// Only a basic check: the address is not verified to exist.
+pub fn validate_email(raw: &str) -> Option<String> {
+    let email = raw.trim().to_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    let valid = email.len() <= EMAIL_MAX_LEN
+        && !local.is_empty()
+        && !domain.contains('@')
+        && !email.chars().any(char::is_whitespace)
+        && domain
+            .split_once('.')
+            .is_some_and(|(name, _)| !name.is_empty())
+        && !domain.ends_with('.')
+        && !domain.contains("..");
+    valid.then_some(email)
+}
+
+/// Same rules as the old Instavox signup: at least `PASSWORD_MIN_CHARS` characters,
+/// with an uppercase letter, a lowercase letter, a digit and a symbol.
+/// Spaces are allowed only one at a time, between words.
+pub fn validate_password(password: &str) -> bool {
+    let length = password.chars().count();
+    if !(PASSWORD_MIN_CHARS..=PASSWORD_MAX_CHARS).contains(&length)
+        || password.starts_with(' ')
+        || password.ends_with(' ')
+        || password.contains("  ")
+    {
+        return false;
+    }
+
+    let (mut upper, mut lower, mut digit, mut symbol) = (false, false, false, false);
+    for letter in password.chars() {
+        match letter {
+            ' ' => {}
+            _ if letter.is_whitespace() || letter.is_control() => return false,
+            _ if letter.is_uppercase() => upper = true,
+            _ if letter.is_lowercase() => lower = true,
+            _ if letter.is_ascii_digit() => digit = true,
+            _ => symbol = true,
+        }
+    }
+    upper && lower && digit && symbol
+}
+
+/// Parses a `YYYY-MM-DD` date (what `<input type="date">` sends) and checks
+/// the user is at least `MIN_AGE_YEARS` old and the date is plausible.
+pub fn validate_birthday(raw: &str, today: NaiveDate) -> Option<NaiveDate> {
+    let birthday = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").ok()?;
+    let age = today.years_since(birthday)?;
+    (MIN_AGE_YEARS..=MAX_AGE_YEARS)
+        .contains(&age)
+        .then_some(birthday)
+}
+
+/// Fields of a new account, already validated.
+pub struct NewAccount {
+    pub username: String,
+    pub email: String,
+    pub password_hash: String,
+    pub firstname: String,
+    pub lastname: String,
+    pub birthday: NaiveDate,
+}
+
+#[derive(Debug)]
+pub enum CreateAccountError {
+    UsernameTaken,
+    EmailTaken,
+    Database(sqlx::Error),
+}
+
+pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User, CreateAccountError> {
+    let result = sqlx::query(
+        "INSERT INTO users (username, email, password_hash, firstname, lastname, birthday)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, username, displayname, firstname, lastname, birthday, photo_url, background_url",
     )
-    .bind(username)
+    .bind(&account.username)
+    .bind(&account.email)
+    .bind(&account.password_hash)
+    .bind(&account.firstname)
+    .bind(&account.lastname)
+    .bind(account.birthday)
     .fetch_one(pool)
+    .await;
+
+    match result {
+        Ok(row) => User::from_row(&row).map_err(CreateAccountError::Database),
+        Err(err) if is_unique_violation(&err) => {
+            let constraint = err.as_database_error().and_then(|db_err| db_err.constraint());
+            if constraint == Some("users_email_lower_idx") {
+                Err(CreateAccountError::EmailTaken)
+            } else {
+                Err(CreateAccountError::UsernameTaken)
+            }
+        }
+        Err(err) => Err(CreateAccountError::Database(err)),
+    }
+}
+
+/// Id and password hash of the account matching a username or an email, ignoring case.
+/// The hash is `None` for accounts created before passwords existed.
+pub async fn find_credentials(
+    pool: &PgPool,
+    login: &str,
+) -> Result<Option<(i32, Option<String>)>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT id, password_hash FROM users
+         WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)
+         LIMIT 1",
+    )
+    .bind(login.trim())
+    .fetch_optional(pool)
     .await?;
-    User::from_row(&row)
+
+    row.map(|row| Ok((row.try_get("id")?, row.try_get("password_hash")?)))
+        .transpose()
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<User>, sqlx::Error> {

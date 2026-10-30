@@ -10,27 +10,54 @@
         {% endblock %}
     </head>
     <body>
-        <div class="grid horizontal page">
+        <div class="grid horizontal page end fixed full-width">
             <div class="flex full height center side infos vertical">
                 <header><img src="/public/favicon.ico" alt="Logo" class="logo"><div>Bonfire</div></header>
                 <nav>
-                    <a href="user.html"><img src="" alt="photo">You</a>
+                    {% if let Some(viewer) = layout.viewer %}
+                    <a href="/user/{{ viewer.username }}" class="flex center">
+                        {% if let Some(url) = viewer.photo_url %}
+                        <img src="{{ url }}" alt="" class="nav-avatar" />
+                        {% else %}
+                        <span class="nav-avatar placeholder" aria-hidden="true">{{ viewer.initial() }}</span>
+                        {% endif %}
+                        You
+                    </a>
+                    {% endif %}
                     <a href="/">Home</a>
-                    <a href="your-feed">Feed</a>
-                    <a href="communities">Communities</a>
-                    <a href="messenger">Messenger</a>
-                    <a href="settings">Settings</a>
+                    <a href="/your-feed">Feed</a>
+                    <a href="/communities">Communities</a>
+                    <a href="/messenger">Messenger</a>
+                    <a href="/settings">Settings</a>
                 </nav>
                 <div class="flex bottom center vertical">
                     <!-- Versions -->
-                    <div>Bonfire Protocol &middot v.0.0.4</div>
+                    <div>Bonfire Protocol &middot; v.0.0.4</div>
                     <div class="flex wrap space-around infos">
-                        <a href="terms-of-use">&bull;Terms of Use</a>
-                        <a href="privacy-policy">&bull;Privacy Policy</a>
-                        <a href="cookies">&bull;Cookies</a>
-                        <a href="rules">&bull;Server rules</a>
+                        <a href="/terms-of-use">&bull;Terms of Use</a>
+                        <a href="/privacy-policy">&bull;Privacy Policy</a>
+                        <a href="/cookies">&bull;Cookies</a>
+                        <a href="/rules">&bull;Server rules</a>
                     </div>
                 </div>
+            </div>
+            <div class="flex horizontal right">
+                {% if let Some(viewer) = layout.viewer %}
+                <button>notif</button>
+                <a href="/user/{{ viewer.username }}" class="flex horizontal center">
+                    <div>{{ viewer.username }}</div>
+                    {% if let Some(url) = viewer.photo_url %}
+                    <img src="{{ url }}" alt="" class="nav-avatar" />
+                    {% else %}
+                    <span class="nav-avatar placeholder" aria-hidden="true">{{ viewer.initial() }}</span>
+                    {% endif %}
+                </a>
+                <form action="/logout" method="post">
+                    <button type="submit">Logout</button>
+                </form>
+                {% else %}
+                <div class="flex horizontal"><a href="/login" class="page-link">Login</a><a href="/register" class="page-link">Register</a></div>
+                {% endif %}
             </div>
         </div>
         <div class="flex center full-width vertical content margin">

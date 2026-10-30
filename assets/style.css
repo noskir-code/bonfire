@@ -78,7 +78,7 @@ nav {
     width: 100%;
 }
 
-nav a {
+nav a, a.page-link {
     display: block;
     text-decoration: none;
     color: var(--text-button);
@@ -86,7 +86,7 @@ nav a {
     width: 100%;
 }
 
-nav a:hover {
+nav a:hover, a.page-link:hover {
     background-color: var(--button);
 }
 
@@ -137,7 +137,7 @@ footer {
     width: 60%;
 }
 
-.bottom {
+.bottom, .end {
     justify-content: end;
 }
 
@@ -173,6 +173,10 @@ footer {
     grid-template-columns: max-content auto;
 }
 
+.horizontal {
+    flex-direction: row;
+}
+
 .vertical {
     flex-flow: column;
 }
@@ -206,6 +210,11 @@ div .small.text {
 
 .logo {
     width: 2em;
+}
+
+.fixed {
+    position: fixed;
+    z-index: 1;
 }
 
 
@@ -300,4 +309,51 @@ button.button {
     border: none;
     font-size: 1em;
     cursor: pointer;
+}
+
+.nav-avatar {
+    width: 1.6em;
+    height: 1.6em;
+    margin-right: 0.5em;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.nav-avatar.placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8em;
+    width: 2em;
+    height: 2em;
+    background-color: var(--button);
+    color: var(--light-text);
+}
+
+/*
+Login and register
+*/
+
+.auth form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+}
+
+.auth label {
+    font-weight: bold;
+    margin-top: 0.5em;
+}
+
+.auth input {
+    padding: 0.4em;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-radius: 0.3em;
+}
+
+.auth button {
+    margin-top: 1em;
+    align-self: flex-start;
 }
