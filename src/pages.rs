@@ -50,6 +50,7 @@ pub fn page_routes() -> Router<AppState> {
         .route("/posts/{post_id}/comments", post(comment::create_comment))
         .route("/posts/{post_id}/like", post(reaction::like))
         .route("/posts/{post_id}/share", post(reaction::share))
+        .route("/comments/{comment_id}/like", post(comment::like_comment))
         .route("/communities", get(community::communities_page).post(community::create_community))
         .route("/community/{slug}", get(community::community_page))
         .route("/community/{slug}/join", post(community::join))

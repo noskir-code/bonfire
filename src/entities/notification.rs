@@ -62,13 +62,15 @@ pub enum Kind {
     Comment,
     /// A comment answering one of the user's comments.
     Reply,
+    /// A like of one of the user's comments.
+    CommentLike,
     Share,
     /// An account of another server followed the user.
     Follow,
 }
 
 impl Kind {
-    const ALL: [Self; 5] = [Self::Like, Self::Comment, Self::Reply, Self::Share, Self::Follow];
+    const ALL: [Self; 6] = [Self::Like, Self::Comment, Self::Reply, Self::CommentLike, Self::Share, Self::Follow];
 
     /// Stored in the database.
     fn as_str(self) -> &'static str {
@@ -76,6 +78,7 @@ impl Kind {
             Self::Like => "like",
             Self::Comment => "comment",
             Self::Reply => "reply",
+            Self::CommentLike => "comment_like",
             Self::Share => "share",
             Self::Follow => "follow",
         }
@@ -91,6 +94,7 @@ impl Kind {
             Self::Like => "liked your post",
             Self::Comment => "commented on your post",
             Self::Reply => "replied to your comment",
+            Self::CommentLike => "liked your comment",
             Self::Share => "shared your post",
             Self::Follow => "followed you from the Fediverse",
         }
@@ -326,6 +330,37 @@ pub async fn comment_added(
     .bind(comment_id)
     .bind(parent_author)
     .bind(Kind::Reply.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Notifies the comment's author of a like by `actor_id`, unless they liked
+/// their own comment. Comments of other servers have nobody here to notify.
+pub async fn comment_like_added(pool: &PgPool, comment_id: i64, actor_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "added",
+        "INSERT INTO notifications (user_id, kind, actor_user_id, post_id, comment_id)
+         SELECT user_id, $1, $2, post_id, id FROM comments
+         WHERE id = $3 AND user_id IS NOT NULL AND user_id <> $2"
+    ))
+    .bind(Kind::CommentLike.as_str())
+    .bind(actor_id)
+    .bind(comment_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// A removed like of a comment removes its notification, read or not.
+pub async fn comment_like_removed(pool: &PgPool, comment_id: i64, actor_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "removed",
+        "DELETE FROM notifications WHERE kind = $1 AND actor_user_id = $2 AND comment_id = $3"
+    ))
+    .bind(Kind::CommentLike.as_str())
+    .bind(actor_id)
+    .bind(comment_id)
     .execute(pool)
     .await?;
     Ok(())

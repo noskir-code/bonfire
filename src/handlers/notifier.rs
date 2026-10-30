@@ -162,6 +162,41 @@ pub async fn comment_created(state: &AppState, pool: &PgPool, comment_id: i64) {
     queue(federation, pool, Signer::User(commenter.id), &audience, &activities::create(&note)).await;
 }
 
+/// A like of a comment added or removed by `user`: sent to the liker's
+/// followers, and to the comment's author (their followers if they're here).
+pub async fn comment_like_changed(state: &AppState, pool: &PgPool, user: &User, comment_id: i64, toggled: Toggled) {
+    let Some(federation) = state.federation.as_deref() else {
+        return;
+    };
+    if !user.federation_enabled {
+        return;
+    }
+    // Only comments of posts everyone can see.
+    let comment = match comment::find_public(pool, comment_id).await {
+        Ok(Some((comment, _))) => comment,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!("failed to load comment {} for the Fediverse: {}", comment_id, err);
+            return;
+        }
+    };
+    if comment.author.local().is_some_and(|author| !author.federation_enabled) {
+        return;
+    }
+    let mut audience = Audience {
+        users: vec![user.id],
+        ..Audience::default()
+    };
+    audience.add_author(&comment.author);
+    let like = activities::like_comment(federation, user, &comment, &toggled.reacted_at);
+    let activity = if toggled.active {
+        activities::with_context(like)
+    } else {
+        activities::undo(&like)
+    };
+    queue(federation, pool, Signer::User(user.id), &audience, &activity).await;
+}
+
 /// A like or share added or removed by `user`.
 pub async fn reaction_changed(state: &AppState, pool: &PgPool, user: &User, post_id: i64, reaction: Reaction, toggled: Toggled) {
     let Some(federation) = state.federation.as_deref() else {

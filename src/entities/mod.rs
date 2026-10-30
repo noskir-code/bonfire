@@ -18,6 +18,7 @@ pub const TABLES: &[&schema::Table] = &[
     &post::LIKES_TABLE,
     &post::SHARES_TABLE,
     &comment::TABLE,
+    &comment::LIKES_TABLE,
     &community::MEMBERS_TABLE,
     &community::MODERATORS_TABLE,
     &community::RULES_TABLE,

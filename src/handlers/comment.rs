@@ -139,7 +139,7 @@ pub async fn post_page(
         let Some(post) = post::find(pool, post_id, viewer_id).await? else {
             return Ok(None);
         };
-        let comments = comment::for_post(pool, post_id).await?;
+        let comments = comment::for_post(pool, post_id, viewer_id).await?;
         Ok::<_, sqlx::Error>(Some((post, comments)))
     }
     .await;
@@ -249,4 +249,52 @@ pub async fn create_comment(
         Err(error) => format!("/posts/{post_id}?error={}#comment-form", error.code()),
     };
     Redirect::to(&location).into_response()
+}
+
+/// Likes or unlikes a comment, then goes back to it.
+pub async fn like_comment(State(state): State<AppState>, session: Session, Path(comment_id): Path<i64>) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let failed = |err: sqlx::Error| {
+        tracing::error!("failed to like comment {}: {}", comment_id, err);
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    let result = async {
+        // Only comments of posts the user can see.
+        let Some(post_id) = comment::post_of(&pool, comment_id).await.map_err(failed)? else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        if post::find(&pool, post_id, Some(me.id)).await.map_err(failed)?.is_none() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        let toggled = comment::toggle_like(&pool, comment_id, me.id).await.map_err(failed)?;
+        Ok((post_id, toggled))
+    }
+    .await;
+
+    match result {
+        Ok((post_id, toggled)) => {
+            let notified = if toggled.active {
+                notification::comment_like_added(&pool, comment_id, me.id).await
+            } else {
+                notification::comment_like_removed(&pool, comment_id, me.id).await
+            };
+            if let Err(err) = notified {
+                tracing::warn!("failed to update notification of like on comment {}: {}", comment_id, err);
+            }
+            notifier::comment_like_changed(&state, &pool, &me, comment_id, toggled).await;
+            Redirect::to(&format!("/posts/{post_id}#comment-{comment_id}")).into_response()
+        }
+        Err(status) => {
+            let layout = Layout::load(&state, &session).await;
+            let message = if status == StatusCode::NOT_FOUND {
+                "This comment does not exist."
+            } else {
+                "Something went wrong, try again later."
+            };
+            error_page(layout, status, message)
+        }
+    }
 }

@@ -22,13 +22,22 @@
     {% endif %}
     {% endif %}
     <p class="post-body">{{ comment.body }}</p>
-    {% if signed_in %}
-    <a
-        href="/posts/{{ post_id }}?reply_to={{ comment.id }}#comment-form"
-        class="action reply-link"
-        data-reply-to="{{ comment.id }}"
-        data-reply-author="{{ comment.author.mention() }}"
-    >Reply</a>
-    {% endif %}
+    <footer class="comment-actions">
+        {% if signed_in %}
+        <form action="/comments/{{ comment.id }}/like" method="post">
+            <button type="submit" class="action{% if comment.liked %} active{% endif %}" aria-pressed="{{ comment.liked }}">
+                {% if comment.liked %}Liked{% else %}Like{% endif %} · {{ comment.like_count }}
+            </button>
+        </form>
+        <a
+            href="/posts/{{ post_id }}?reply_to={{ comment.id }}#comment-form"
+            class="action"
+            data-reply-to="{{ comment.id }}"
+            data-reply-author="{{ comment.author.mention() }}"
+        >Reply</a>
+        {% else %}
+        <a href="/login" class="action">Like · {{ comment.like_count }}</a>
+        {% endif %}
+    </footer>
 </article>
 {% endmacro %}

@@ -43,13 +43,28 @@ pub const TABLE: Table = Table {
     ],
 };
 
+/// One row per user who liked a comment.
+pub const LIKES_TABLE: Table = Table {
+    name: "comment_likes",
+    columns: &[
+        Column::new("comment_id", "BIGINT").references("comments(id) ON DELETE CASCADE"),
+        Column::new("user_id", "INTEGER").references("users(id) ON DELETE CASCADE"),
+        Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
+    ],
+    indexes: &[Index::unique("comment_likes_comment_user_idx", "comment_id, user_id")],
+};
+
 /// Columns read by `Comment::from_row`, with the joins they need: the
-/// comment as `c`, its author as `u`. A macro so it can be used in `concat!`.
+/// comment as `c`, its author as `u`. `$liked` is the SQL telling whether the
+/// viewer liked it. A macro so it can be used in `concat!`.
 macro_rules! comment_select {
-    () => {
+    ($liked:literal) => {
         concat!(
             "SELECT c.id AS comment_id, c.body, c.created_at AS commented_at, c.post_id, c.ap_id,
-                    c.parent_id, COALESCE(pu.username, pra.username) AS parent_author, ",
+                    c.parent_id, COALESCE(pu.username, pra.username) AS parent_author,
+                    (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count, ",
+            $liked,
+            " AS liked, ",
             user_columns!("u."),
             ", ",
             remote_author_columns!(),
@@ -73,6 +88,9 @@ pub struct Comment {
     /// The comment it replies to, and that comment's author.
     pub parent_id: Option<i64>,
     pub parent_author: Option<String>,
+    pub like_count: i64,
+    /// Whether the viewer liked it, always `false` for visitors.
+    pub liked: bool,
 }
 
 impl Comment {
@@ -85,6 +103,8 @@ impl Comment {
             ap_id: row.try_get("ap_id")?,
             parent_id: row.try_get("parent_id")?,
             parent_author: row.try_get("parent_author")?,
+            like_count: row.try_get("like_count")?,
+            liked: row.try_get("liked")?,
         })
     }
 
@@ -241,7 +261,7 @@ pub async fn find_by_ap_id(pool: &PgPool, ap_id: &str) -> Result<Option<(i64, i6
 /// what other Fediverse servers may see.
 pub async fn find_public(pool: &PgPool, comment_id: i64) -> Result<Option<(Comment, i64)>, sqlx::Error> {
     sqlx::query(concat!(
-        comment_select!(),
+        comment_select!("FALSE"),
         " JOIN posts p ON p.id = c.post_id
           LEFT JOIN communities cm ON cm.id = p.community_id
          WHERE c.id = $2 AND ",
@@ -257,19 +277,54 @@ pub async fn find_public(pool: &PgPool, comment_id: i64) -> Result<Option<(Comme
     .transpose()
 }
 
-/// Comments of a post, oldest first like a conversation.
-pub async fn for_post(pool: &PgPool, post_id: i64) -> Result<Vec<Comment>, sqlx::Error> {
+/// Comments of a post, oldest first like a conversation, as seen by `viewer_id`.
+pub async fn for_post(pool: &PgPool, post_id: i64, viewer_id: Option<i32>) -> Result<Vec<Comment>, sqlx::Error> {
     sqlx::query(concat!(
-        comment_select!(),
+        comment_select!("EXISTS (SELECT 1 FROM comment_likes vl WHERE vl.comment_id = c.id AND vl.user_id = $2)"),
         " WHERE c.post_id = $1
          ORDER BY c.created_at, c.id"
     ))
     .bind(post_id)
+    .bind(viewer_id)
     .fetch_all(pool)
     .await?
     .iter()
     .map(Comment::from_row)
     .collect()
+}
+
+/// The post of a comment, to check the user can see it before liking.
+pub async fn post_of(pool: &PgPool, comment_id: i64) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT post_id FROM comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Adds the like, or removes it when the user already liked the comment.
+/// The caller checks the user can see the comment's post.
+pub async fn toggle_like(pool: &PgPool, comment_id: i64, user_id: i32) -> Result<post::Toggled, sqlx::Error> {
+    let removed: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "DELETE FROM comment_likes WHERE comment_id = $1 AND user_id = $2 RETURNING created_at",
+    )
+    .bind(comment_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(reacted_at) = removed {
+        return Ok(post::Toggled { active: false, reacted_at });
+    }
+    // DO UPDATE instead of DO NOTHING so a double click still returns the row.
+    let reacted_at = sqlx::query_scalar(
+        "INSERT INTO comment_likes (comment_id, user_id) VALUES ($1, $2)
+         ON CONFLICT (comment_id, user_id) DO UPDATE SET created_at = comment_likes.created_at
+         RETURNING created_at",
+    )
+    .bind(comment_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(post::Toggled { active: true, reacted_at })
 }
 
 /// A comment on the post with all the replies below it, at any depth.

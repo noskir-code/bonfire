@@ -353,6 +353,23 @@ pub fn like(federation: &Federation, liker: &User, post: &Post, liked_at: &DateT
     })
 }
 
+/// A like of a comment: its Note, written here or on another server.
+pub fn like_comment(federation: &Federation, liker: &User, comment: &Comment, liked_at: &DateTime<Utc>) -> Value {
+    let actor = federation.actor_url(liker.public_id);
+    let author = match &comment.author {
+        Author::Local(author) => federation.actor_url(author.public_id),
+        Author::Remote(remote) => remote.actor_id.clone(),
+    };
+    json!({
+        "id": format!("{actor}/comment-likes/{}/{}", comment.id, liked_at.timestamp_micros()),
+        "type": "Like",
+        "actor": actor,
+        "object": comment_note_id(federation, comment),
+        "to": [author],
+        "cc": [PUBLIC],
+    })
+}
+
 /// A share (boost, renote) of a post, shown on the sharer's profile.
 pub fn announce(federation: &Federation, sharer: &User, post: &Post, shared_at: &DateTime<Utc>) -> Value {
     let actor = federation.actor_url(sharer.public_id);
