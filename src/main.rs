@@ -18,6 +18,9 @@ use settings::Config;
 pub struct AppState {
     /// `None` when no `DATABASE_URL` is configured.
     pub pool: Option<PgPool>,
+    pub secure_cookies: bool,
+    /// How long "stay signed in" lasts, see `handlers::session`.
+    pub remember_days: i32,
 }
 
 async fn shutdown_signal() {
@@ -69,10 +72,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(pool) = &pool
-        && let Err(err) = sqlx::migrate!().run(pool).await
+        && let Err(err) = entities::schema::sync(pool, entities::TABLES).await
     {
-        tracing::error!("failed to run database migrations: {}", err);
+        tracing::error!("failed to update the database schema: {}", err);
     }
+
+    if let Some(pool) = &pool {
+        match entities::session::delete_expired(pool).await {
+            Ok(0) => {}
+            Ok(count) => tracing::info!("deleted {} expired remember tokens", count),
+            Err(err) => tracing::warn!("failed to delete expired remember tokens: {}", err),
+        }
+    }
+
+    let state = AppState {
+        pool,
+        secure_cookies: config.secure_cookies,
+        remember_days: config.remember_me_days,
+    };
 
     let session_layer =SessionManagerLayer::new(MemoryStore::default())
         .with_secure(config.secure_cookies)
@@ -85,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .merge(pages::page_routes())
         .route("/settings/names", post(user::update_names))
+        .route("/settings/bio", post(user::update_bio))
         .route("/settings/username", post(user::update_username))
         .route("/settings/photo", post(user::upload_photo))
         .route("/settings/photo/remove", post(user::remove_photo))
@@ -99,8 +117,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(DefaultBodyLimit::max(
             config.max_request_body_mb * 1024 * 1024,
         ))
+        // Inside the session layer: it needs the session to sign users back in.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            handlers::session::restore_remembered,
+        ))
         .layer(session_layer)
-        .with_state(AppState { pool });
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.addr()).await?;
 

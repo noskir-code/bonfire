@@ -35,13 +35,6 @@ impl Layout {
 }
 
 #[derive(Template)]
-#[template(path = "index.html")]
-struct IndexTemplate {
-    title: String,
-    layout: Layout,
-}
-
-#[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorTemplate<'a> {
     title: String,
@@ -69,12 +62,19 @@ pub fn render_template<T: Template>(template: &T) -> Response {
     }
 }
 
-pub async fn index(State(state): State<AppState>, session: Session) -> Response {
-    let template = IndexTemplate {
-        title: "Home".to_string(),
-        layout: Layout::load(&state, &session).await,
-    };
-    render_template(&template)
+/// `raw` without its `#fragment` if it's a path on this site, else `fallback`.
+/// Used for the "return to" field of forms, so a forged form can't send
+/// users to another website (`//evil.example` or `https://...`).
+pub fn local_path(raw: Option<&String>, fallback: &str) -> String {
+    let path = raw
+        .map(|raw| raw.split('#').next().unwrap_or_default())
+        .unwrap_or_default();
+    let safe = path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && path.len() <= 512;
+    if safe { path.to_string() } else { fallback.to_string() }
 }
 
 /// Any route that does not exist.

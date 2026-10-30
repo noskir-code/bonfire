@@ -1,0 +1,99 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content profile-edit settings">
+    <h1>Edit profile</h1>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% else if saved %}
+    <p class="saved">Changes saved.</p>
+    {% endif %}
+    <p><a href="/user/{{ user.username }}">See your profile</a></p>
+
+    <form action="/settings/names" method="post">
+        <label for="displayname">Display name</label>
+        <input
+            id="displayname"
+            type="text"
+            name="displayname"
+            value="{{ user.displayname }}"
+            maxlength="{{ name_max_chars }}"
+        />
+        <label for="firstname">First name</label>
+        <input
+            id="firstname"
+            type="text"
+            name="firstname"
+            value="{{ user.firstname }}"
+            maxlength="{{ name_max_chars }}"
+        />
+        <label for="lastname">Last name</label>
+        <input
+            id="lastname"
+            type="text"
+            name="lastname"
+            value="{{ user.lastname }}"
+            maxlength="{{ name_max_chars }}"
+        />
+        <button type="submit" class="button">Save names</button>
+    </form>
+
+    <form action="/settings/bio" method="post">
+        <label for="bio">Bio</label>
+        <textarea
+            id="bio"
+            name="bio"
+            rows="4"
+            maxlength="{{ bio_max_chars }}"
+            placeholder="A few words about you, shown in &quot;About me&quot;."
+        >{{ user.bio }}</textarea>
+        <button type="submit" class="button">Save bio</button>
+    </form>
+
+    <form action="/settings/username" method="post">
+        <label for="username">Username</label>
+        <input
+            id="username"
+            type="text"
+            name="username"
+            value="{{ user.username }}"
+            maxlength="{{ username_max_len }}"
+            pattern="[A-Za-z0-9_]+"
+            required
+        />
+        <button type="submit" class="button">Save username</button>
+    </form>
+
+    <form action="/settings/photo" method="post" enctype="multipart/form-data">
+        <label for="photo">Photo</label>
+        <input
+            id="photo"
+            type="file"
+            name="{{ image_field }}"
+            accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+            required
+        />
+        <button type="submit" class="button">Upload photo</button>
+    </form>
+    {% if user.photo_url.is_some() %}
+    <form action="/settings/photo/remove" method="post">
+        <button type="submit" class="button">Remove photo</button>
+    </form>
+    {% endif %}
+
+    <form action="/settings/background" method="post" enctype="multipart/form-data">
+        <label for="background">Background</label>
+        <input
+            id="background"
+            type="file"
+            name="{{ image_field }}"
+            accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+            required
+        />
+        <button type="submit" class="button">Upload background</button>
+    </form>
+    {% if user.background_url.is_some() %}
+    <form action="/settings/background/remove" method="post">
+        <button type="submit" class="button">Remove background</button>
+    </form>
+    {% endif %}
+</section>
+{% endblock %}

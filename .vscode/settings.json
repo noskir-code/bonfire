@@ -6,14 +6,21 @@
         "castopod",
         "chrono",
         "DFRN",
+        "displayname",
+        "endmatch",
         "Fediverse",
+        "firstname",
         "Friendica",
         "Funkwhale",
         "Hubzilla",
         "IMAGESHARING",
+        "lastname",
         "Lemmy",
         "Mobilizon",
+        "notif",
+        "serde",
         "sqlx",
-        "videotelephony",
+        "TIMESTAMPTZ",
+        "videotelephony"
     ]
 }

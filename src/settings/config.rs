@@ -113,6 +113,8 @@ pub struct Config {
     pub log_level: String,
     pub secure_cookies: bool,
     pub session_inactivity_days: i64,
+    /// How long "stay signed in" lasts without visiting.
+    pub remember_me_days: i32,
 }
 
 impl Config {
@@ -132,6 +134,7 @@ impl Config {
                 .unwrap_or_else(|| "info".to_string()),
             secure_cookies: settings.flag("COOKIE_SECURE", !cfg!(debug_assertions)),
             session_inactivity_days: settings.parse("SESSION_INACTIVITY_DAYS", 7)?,
+            remember_me_days: settings.parse("REMEMBER_ME_DAYS", 30)?,
         })
     }
 

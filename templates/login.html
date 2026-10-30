@@ -1,14 +1,13 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %} {% import "macros/form.html" as form %} {% block content %}
 <section class="box content auth">
     <h1>Login</h1>
-    {% if let Some(message) = error %}
-    <p class="error">{{ message }}</p>
-    {% endif %}
+    {% call form::general(self.general_errors()) %}{% endcall %}
 
     <form action="/login" method="post">
         <label for="login">Username or email</label>
         <input
             id="login"
+            {% call form::invalid("login", self.error_for("login")) %}{% endcall %}
             type="text"
             name="login"
             value="{{ login }}"
@@ -16,14 +15,21 @@
             required
             autofocus
         />
+        {% call form::message("login", self.error_for("login")) %}{% endcall %}
         <label for="password">Password</label>
         <input
             id="password"
+            {% call form::invalid("password", self.error_for("password")) %}{% endcall %}
             type="password"
             name="password"
             autocomplete="current-password"
             required
         />
+        {% call form::message("password", self.error_for("password")) %}{% endcall %}
+        <label class="checkbox">
+            <input type="checkbox" name="remember" checked />
+            Stay signed in
+        </label>
         <button type="submit" class="button">Login</button>
     </form>
     <p>No account yet? <a href="/register">Register</a></p>

@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::{
     AppState,
-    handlers::{auth, system, user},
+    handlers::{auth, comment, post, reaction, user},
 };
 
 async fn health_live() -> Response {
@@ -43,10 +43,17 @@ async fn health_ready(State(state): State<AppState>) -> Response {
 
 pub fn page_routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(system::index))
+        .route("/", get(post::home_page))
+        .route("/your-feed", get(post::feed_page))
+        .route("/posts", post(post::create_post))
+        .route("/posts/{post_id}", get(comment::post_page))
+        .route("/posts/{post_id}/comments", post(comment::create_comment))
+        .route("/posts/{post_id}/like", post(reaction::like))
+        .route("/posts/{post_id}/share", post(reaction::share))
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/user/{username}", get(user::user_page))
+        .route("/settings", get(user::settings_page))
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/register", get(auth::register_page).post(auth::register))
         .route("/logout", post(auth::logout))

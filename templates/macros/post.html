@@ -1,0 +1,98 @@
+{# Form to write a post. `composer` is `handlers::post::Composer`. #}
+{% macro composer(composer) %}
+<section class="box content composer">
+    <h2>Create a post</h2>
+    {% if let Some(message) = composer.error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    <form action="/posts" method="post">
+        <input type="hidden" name="page" value="{{ composer.page }}" />
+        <label for="post-body" class="visually-hidden">Post</label>
+        <textarea
+            id="post-body"
+            name="body"
+            placeholder="What do you want to share?"
+            maxlength="{{ composer.body_max_chars }}"
+            rows="4"
+            required
+        ></textarea>
+        <div class="flex center space-between">
+            <label>
+                Who can see it
+                <select name="visibility">
+                    {% for visibility in composer.visibilities %}
+                    <option value="{{ visibility.as_str() }}">{{ visibility.label() }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button type="submit" class="button">Publish</button>
+        </div>
+    </form>
+</section>
+{% endmacro %}
+
+{# One post with its author and actions. `signed_in` shows the buttons,
+   `return_to` is the page they come back to after a like or a share,
+   `collapse` cuts long posts with a "Show more" button (done by system.js). #}
+{% macro post_card(post, signed_in, return_to, collapse) %}
+<article class="box content post" id="post-{{ post.id }}">
+    {% if let Some(sharer) = post.shared_by %}
+    <p class="post-shared-by">Shared by <a href="/user/{{ sharer }}">@{{ sharer }}</a></p>
+    {% endif %}
+    <header class="post-header">
+        <a href="/user/{{ post.author.username }}" class="post-author">
+            {% if let Some(url) = post.author.photo_url %}
+            <img src="{{ url }}" alt="" class="nav-avatar" />
+            {% else %}
+            <span class="nav-avatar placeholder" aria-hidden="true">{{ post.author.initial() }}</span>
+            {% endif %}
+            <span>
+                <strong>{{ post.author.display_name() }}</strong>
+                <span class="post-username">@{{ post.author.username }}</span>
+            </span>
+        </a>
+        <a href="/posts/{{ post.id }}" class="post-meta">
+            <time datetime="{{ post.created_at_iso() }}" data-relative>{{ post.created_at_label() }}</time>
+            {% if post.is_private() %} · <span class="only-you">Only me</span>{% endif %}
+        </a>
+    </header>
+    <p class="post-body" id="post-{{ post.id }}-body"{% if collapse %} data-collapsible{% endif %}>{{ post.body }}</p>
+    <footer class="post-actions">
+        {% if signed_in %}
+        <form action="/posts/{{ post.id }}/like" method="post">
+            <input type="hidden" name="return" value="{{ return_to }}" />
+            <button type="submit" class="action{% if post.liked %} active{% endif %}" aria-pressed="{{ post.liked }}">
+                {% if post.liked %}Liked{% else %}Like{% endif %} · {{ post.like_count }}
+            </button>
+        </form>
+        {% else %}
+        <a href="/login" class="action">Like · {{ post.like_count }}</a>
+        {% endif %}
+
+        <a href="/posts/{{ post.id }}#comments" class="action">Comments · {{ post.comment_count }}</a>
+
+        {% if signed_in && post.can_share() %}
+        <form action="/posts/{{ post.id }}/share" method="post">
+            <input type="hidden" name="return" value="{{ return_to }}" />
+            <button type="submit" class="action{% if post.shared %} active{% endif %}" aria-pressed="{{ post.shared }}">
+                {% if post.shared %}Shared{% else %}Share{% endif %} · {{ post.share_count }}
+            </button>
+        </form>
+        {% else %}
+        <span class="action disabled">Shares · {{ post.share_count }}</span>
+        {% endif %}
+
+        {# Shown by system.js, which needs JavaScript to copy or share the link. #}
+        <button type="button" class="action" data-share-url="/posts/{{ post.id }}" hidden>Copy link</button>
+    </footer>
+</article>
+{% endmacro %}
+
+{# Every post, long ones collapsed, or `empty` when there is none. Used by home and feed. #}
+{% macro post_list(posts, empty, signed_in, return_to) %}
+{% for post in posts %}
+{% call post_card(post, signed_in, return_to, true) %}{% endcall %}
+{% else %}
+<p class="empty">{{ empty }}</p>
+{% endfor %}
+{% endmacro %}

@@ -17,6 +17,7 @@
     --button: hsl(200, 23%, 90%);
     --text-button: black;
     --background: white;
+    --error: hsl(0, 70%, 45%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,6 +28,7 @@
         --button: hsl(200, 23%, 10%);
         --text-button: white;
         --background: hsl(200, 23%, 10%);
+        --error: hsl(0, 80%, 65%);
     }
 }
 
@@ -103,7 +105,7 @@ footer {
 }
 
 .error {
-    color: hsl(0, 70%, 45%);
+    color: var(--error);
 }
 
 /*
@@ -282,6 +284,21 @@ Profile
     margin-top: 1em;
 }
 
+/* Pushed to the right of the name, under the background. */
+.profile-edit-link {
+    margin-left: auto;
+}
+
+.saved {
+    color: hsl(140, 50%, 35%);
+}
+
+@media (prefers-color-scheme: dark) {
+    .saved {
+        color: hsl(140, 50%, 60%);
+    }
+}
+
 .profile-edit form {
     display: flex;
     flex-wrap: wrap;
@@ -295,7 +312,14 @@ Profile
     font-weight: bold;
 }
 
-.profile-edit input {
+.profile-edit textarea {
+    width: 100%;
+    font-size: 1em;
+    resize: vertical;
+}
+
+.profile-edit input,
+.profile-edit textarea {
     flex: 1;
     min-width: 12em;
     padding: 0.4em;
@@ -353,7 +377,250 @@ Login and register
     border-radius: 0.3em;
 }
 
+/* `.invalid`: rejected by the server. `:user-invalid`: rejected by the browser
+   (required, pattern, length...), only after the user typed or submitted. */
+.auth input.invalid,
+.auth input:user-invalid {
+    border: solid 0.15em var(--error);
+}
+
+.field-error {
+    margin: 0;
+    font-size: 0.9em;
+    color: var(--error);
+}
+
 .auth button {
     margin-top: 1em;
     align-self: flex-start;
+}
+
+/*
+Profile tabs
+*/
+
+nav.profile-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    height: auto;
+    border-top: solid 0.1em var(--button);
+}
+
+nav.profile-tabs a {
+    width: auto;
+    flex: 1;
+    min-width: 6em;
+    padding: 0.8em 1em;
+    text-align: center;
+    border-bottom: solid 0.2em transparent;
+}
+
+nav.profile-tabs a.active {
+    font-weight: bold;
+    border-bottom-color: var(--text);
+}
+
+.profile-tab {
+    margin-top: 1em;
+}
+
+.profile-bio {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
+.profile-about {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.5em 1.5em;
+}
+
+.profile-about dt {
+    font-weight: bold;
+}
+
+.profile-about dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.empty,
+.only-you {
+    color: var(--light-text);
+}
+
+/*
+Posts
+*/
+
+.composer {
+    margin-bottom: 1em;
+}
+
+.composer textarea {
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    font-size: 1em;
+    margin-bottom: 0.5em;
+}
+
+.composer select {
+    margin-left: 0.5em;
+    padding: 0.3em;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-radius: 0.3em;
+}
+
+.posts {
+    gap: 1em;
+    margin-top: 1em;
+}
+
+.post-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    padding: 0;
+}
+
+.post-header div {
+    font-size: 1em;
+}
+
+.post-author {
+    display: flex;
+    align-items: center;
+    color: var(--text);
+    text-decoration: none;
+}
+
+.post-username,
+.post-meta {
+    color: var(--light-text);
+    font-size: 0.9em;
+}
+
+.post-body {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+    /* Lines shown before "Show more" on home and feed, see system.js. */
+    --collapsed-lines: 10;
+}
+
+.post-body.collapsed {
+    max-height: calc(1.5em * var(--collapsed-lines));
+    overflow: hidden;
+    /* The last line fades out, to show the text continues. */
+    mask-image: linear-gradient(to bottom, black 80%, transparent);
+}
+
+.show-more {
+    margin-bottom: 0.5em;
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/*
+Post actions and comments
+*/
+
+.post-meta {
+    text-decoration: none;
+}
+
+.post-shared-by {
+    margin: 0 0 0.5em;
+    font-size: 0.9em;
+    color: var(--light-text);
+}
+
+.post-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+    padding: 0.5em 0 0;
+    border-top: solid 0.1em var(--button);
+}
+
+.post-actions form {
+    margin: 0;
+}
+
+.action {
+    display: inline-block;
+    padding: 0.4em 0.8em;
+    border: none;
+    border-radius: 0.3em;
+    font-size: 0.9em;
+    color: var(--text-button);
+    background: none;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.action:hover {
+    background-color: var(--button);
+}
+
+.action.active {
+    font-weight: bold;
+    background-color: var(--button);
+}
+
+.action.disabled {
+    cursor: default;
+    color: var(--light-text);
+}
+
+.action.disabled:hover {
+    background: none;
+}
+
+.comment {
+    padding: 0.75em 0;
+    border-bottom: solid 0.1em var(--button);
+}
+
+.comment .post-body {
+    margin: 0.5em 0 0;
+}
+
+.comment-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5em;
+    margin-top: 1em;
+}
+
+.comment-form textarea {
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    font-size: 1em;
+}
+
+.auth label.checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    font-weight: normal;
+}
+
+.auth label.checkbox input {
+    width: auto;
 }

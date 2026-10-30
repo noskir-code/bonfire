@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
 <section class="box content profile">
     <div class="profile-background">
         {% if let Some(url) = user.background_url %}
@@ -15,91 +15,59 @@
             <h1 class="profile-name">{{ user.display_name() }}</h1>
             <p class="profile-username">@{{ user.username }}</p>
         </div>
+        {% if is_own_profile %}
+        <a href="/settings" class="button profile-edit-link">Edit profile</a>
+        {% endif %}
     </div>
+    <nav class="profile-tabs" aria-label="Profile sections">
+        {% for link in tabs %}
+        <a href="{{ link.url }}"{% if link.active %} class="active" aria-current="page"{% endif %}>{{ link.label }}</a>
+        {% endfor %}
+    </nav>
 </section>
 
-{% if is_own_profile %}
-<section class="box content profile-edit">
-    <h2>Edit profile</h2>
-    {% if let Some(message) = error %}
-    <p class="error">{{ message }}</p>
+<section class="box content profile-tab">
+    {% match tab %}
+    {% when ProfileTab::Posts %}
+    <h2>Posts</h2>
+    {% if posts.is_empty() %}
+    <p class="empty">
+        {% if is_own_profile %}You haven't posted anything yet.{% else %}@{{ user.username }} hasn't posted anything yet.{% endif %}
+    </p>
     {% endif %}
-
-    <form action="/settings/names" method="post">
-        <label for="displayname">Display name</label>
-        <input
-            id="displayname"
-            type="text"
-            name="displayname"
-            value="{{ user.displayname }}"
-            maxlength="{{ name_max_chars }}"
-        />
-        <label for="firstname">First name</label>
-        <input
-            id="firstname"
-            type="text"
-            name="firstname"
-            value="{{ user.firstname }}"
-            maxlength="{{ name_max_chars }}"
-        />
-        <label for="lastname">Last name</label>
-        <input
-            id="lastname"
-            type="text"
-            name="lastname"
-            value="{{ user.lastname }}"
-            maxlength="{{ name_max_chars }}"
-        />
-        <button type="submit" class="button">Save names</button>
-    </form>
-
-    <form action="/settings/username" method="post">
-        <label for="username">Username</label>
-        <input
-            id="username"
-            type="text"
-            name="username"
-            value="{{ user.username }}"
-            maxlength="{{ username_max_len }}"
-            pattern="[A-Za-z0-9_]+"
-            required
-        />
-        <button type="submit" class="button">Save username</button>
-    </form>
-
-    <form action="/settings/photo" method="post" enctype="multipart/form-data">
-        <label for="photo">Photo</label>
-        <input
-            id="photo"
-            type="file"
-            name="{{ image_field }}"
-            accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
-            required
-        />
-        <button type="submit" class="button">Upload photo</button>
-    </form>
-    {% if user.photo_url.is_some() %}
-    <form action="/settings/photo/remove" method="post">
-        <button type="submit" class="button">Remove photo</button>
-    </form>
+    {% when ProfileTab::Comments %}
+    <h2>Comments</h2>
+    <p class="empty">
+        {% if is_own_profile %}You haven't commented anything yet.{% else %}@{{ user.username }} hasn't commented anything yet.{% endif %}
+    </p>
+    {% when ProfileTab::Friends %}
+    <h2>Friends</h2>
+    <p class="empty">
+        {% if is_own_profile %}You don't have friends yet.{% else %}@{{ user.username }} doesn't have friends yet.{% endif %}
+    </p>
+    {% when ProfileTab::About %}
+    <h2>About me</h2>
+    {% if !user.bio.is_empty() %}
+    <p class="profile-bio">{{ user.bio }}</p>
+    {% else if is_own_profile %}
+    <p class="empty">You haven't written anything about yourself yet.</p>
     {% endif %}
-
-    <form action="/settings/background" method="post" enctype="multipart/form-data">
-        <label for="background">Background</label>
-        <input
-            id="background"
-            type="file"
-            name="{{ image_field }}"
-            accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
-            required
-        />
-        <button type="submit" class="button">Upload background</button>
-    </form>
-    {% if user.background_url.is_some() %}
-    <form action="/settings/background/remove" method="post">
-        <button type="submit" class="button">Remove background</button>
-    </form>
+    {% if !about.is_empty() %}
+    <dl class="profile-about">
+        {% for row in about %}
+        <dt>{{ row.label }}</dt>
+        <dd>{{ row.value }}{% if row.only_you %} <span class="only-you">(only you)</span>{% endif %}</dd>
+        {% endfor %}
+    </dl>
     {% endif %}
+    {% endmatch %}
 </section>
+{% if !posts.is_empty() %}
+<div class="flex center vertical full-width posts">
+    {% for post in posts %}
+    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false) %}{% endcall %}
+    {% endfor %}
+</div>
 {% endif %}
+
 {% endblock %}

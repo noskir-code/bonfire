@@ -1,0 +1,50 @@
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
+<div class="flex center vertical full-width posts">
+    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false) %}{% endcall %}
+
+    <section class="box content comments" id="comments">
+        <h2>Comments</h2>
+        {% for comment in comments %}
+        <article class="comment" id="comment-{{ comment.id }}">
+            <header class="post-header">
+                <a href="/user/{{ comment.author.username }}" class="post-author">
+                    {% if let Some(url) = comment.author.photo_url %}
+                    <img src="{{ url }}" alt="" class="nav-avatar" />
+                    {% else %}
+                    <span class="nav-avatar placeholder" aria-hidden="true">{{ comment.author.initial() }}</span>
+                    {% endif %}
+                    <span>
+                        <strong>{{ comment.author.display_name() }}</strong>
+                        <span class="post-username">@{{ comment.author.username }}</span>
+                    </span>
+                </a>
+                <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
+            </header>
+            <p class="post-body">{{ comment.body }}</p>
+        </article>
+        {% else %}
+        <p class="empty">No comments yet.</p>
+        {% endfor %}
+
+        {% if layout.viewer.is_some() %}
+        <form action="/posts/{{ post.id }}/comments" method="post" id="comment-form" class="comment-form">
+            {% if let Some(message) = error %}
+            <p class="error">{{ message }}</p>
+            {% endif %}
+            <label for="comment-body" class="visually-hidden">Comment</label>
+            <textarea
+                id="comment-body"
+                name="body"
+                placeholder="Write a comment..."
+                maxlength="{{ body_max_chars }}"
+                rows="3"
+                required
+            ></textarea>
+            <button type="submit" class="button">Comment</button>
+        </form>
+        {% else %}
+        <p><a href="/login">Login</a> to comment.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

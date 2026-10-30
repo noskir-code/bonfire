@@ -1,0 +1,8 @@
+{# Attributes for an input rejected by the server: red border, and the message read by screen readers. #}
+{% macro invalid(name, message) %}{% if let Some(text) = message %} class="invalid" aria-invalid="true"{% if !text.is_empty() %} aria-describedby="{{ name }}-error"{% endif %}{% endif %}{% endmacro %}
+
+{# Message shown under the input. #}
+{% macro message(name, message) %}{% if let Some(text) = message %}{% if !text.is_empty() %}<p class="field-error" id="{{ name }}-error">{{ text }}</p>{% endif %}{% endif %}{% endmacro %}
+
+{# Problems not caused by a field. #}
+{% macro general(messages) %}{% for text in messages %}<p class="error">{{ text }}</p>{% endfor %}{% endmacro %}

@@ -1,9 +1,17 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
+{% if layout.viewer.is_some() %}
+{% call posts_ui::composer(composer) %}{% endcall %}
+{% else %}
 <section class="box content">
     <h1>Welcome to Bonfire</h1>
     <p>
         One account for every kind of service: posts, images, videos, music,
         communities and more, all federated over ActivityPub.
     </p>
+    <p><a href="/login">Login</a> or <a href="/register">register</a> to post.</p>
 </section>
+{% endif %}
+<div class="flex center vertical full-width posts">
+    {% call posts_ui::post_list(posts, "Nobody has posted yet.", layout.viewer.is_some(), "/") %}{% endcall %}
+</div>
 {% endblock %}

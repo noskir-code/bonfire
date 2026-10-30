@@ -12,7 +12,8 @@ use tower_sessions::Session;
 
 use crate::{
     AppState,
-    entities::user::{self, NAME_MAX_CHARS, ProfileImage, USERNAME_MAX_LEN, USERNAME_MIN_LEN, User},
+    entities::post::{self, Post},
+    entities::user::{self, BIO_MAX_CHARS, NAME_MAX_CHARS, ProfileImage, USERNAME_MAX_LEN, USERNAME_MIN_LEN, User},
     handlers::{
         image::{self, IMAGE_FIELD, ImageError, MAX_IMAGE_BYTES},
         session::current_user_id,
@@ -20,10 +21,11 @@ use crate::{
     },
 };
 
-/// Errors sent back to the profile page as `?error=<code>`.
+/// Errors sent back to the settings page as `?error=<code>`.
 #[derive(Clone, Copy)]
 enum EditError {
     InvalidName,
+    InvalidBio,
     InvalidUsername,
     UsernameTaken,
     MissingImage,
@@ -33,8 +35,9 @@ enum EditError {
 }
 
 impl EditError {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::InvalidName,
+        Self::InvalidBio,
         Self::InvalidUsername,
         Self::UsernameTaken,
         Self::MissingImage,
@@ -46,6 +49,7 @@ impl EditError {
     fn code(self) -> &'static str {
         match self {
             Self::InvalidName => "invalid-name",
+            Self::InvalidBio => "invalid-bio",
             Self::InvalidUsername => "invalid-username",
             Self::UsernameTaken => "username-taken",
             Self::MissingImage => "missing-image",
@@ -63,6 +67,9 @@ impl EditError {
         match self {
             Self::InvalidName => format!(
                 "Names must be at most {NAME_MAX_CHARS} characters, without control characters."
+            ),
+            Self::InvalidBio => format!(
+                "The bio must be at most {BIO_MAX_CHARS} characters, without control characters."
             ),
             Self::InvalidUsername => format!(
                 "The username must be {USERNAME_MIN_LEN} to {USERNAME_MAX_LEN} characters, using only letters, digits and _."
@@ -100,6 +107,95 @@ fn server_error(err: sqlx::Error) -> EditError {
     EditError::Server
 }
 
+/// Sections of the profile, chosen with `?tab=`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProfileTab {
+    Posts,
+    Comments,
+    Friends,
+    About,
+}
+
+impl ProfileTab {
+    const ALL: [Self; 4] = [Self::Posts, Self::Comments, Self::Friends, Self::About];
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Posts => "posts",
+            Self::Comments => "comments",
+            Self::About => "about",
+            Self::Friends => "friends",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Posts => "Posts",
+            Self::Comments => "Comments",
+            Self::About => "About me",
+            Self::Friends => "Friends",
+        }
+    }
+
+    /// Unknown or missing values open the posts.
+    fn from_query(value: Option<&String>) -> Self {
+        value
+            .and_then(|slug| Self::ALL.into_iter().find(|tab| tab.slug() == slug))
+            .unwrap_or(Self::Posts)
+    }
+}
+
+struct TabLink {
+    label: &'static str,
+    url: String,
+    active: bool,
+}
+
+/// The default tab links to the profile itself, so `/user/alice` stays the main URL.
+fn tab_links(username: &str, current: ProfileTab) -> Vec<TabLink> {
+    ProfileTab::ALL
+        .into_iter()
+        .map(|tab| TabLink {
+            label: tab.label(),
+            url: match tab {
+                ProfileTab::Posts => format!("/user/{username}"),
+                _ => format!("/user/{username}?tab={}", tab.slug()),
+            },
+            active: tab == current,
+        })
+        .collect()
+}
+
+struct AboutRow {
+    label: &'static str,
+    value: String,
+    /// Hidden from other users, shown to the owner with a note.
+    only_you: bool,
+}
+
+/// What the viewer may see in "About me", following the privacy settings.
+fn about_rows(user: &User, is_own_profile: bool) -> Vec<AboutRow> {
+    let mut rows = Vec::new();
+    let mut add = |label, value: String, public: bool| {
+        if !value.is_empty() && (public || is_own_profile) {
+            rows.push(AboutRow {
+                label,
+                value,
+                only_you: !public,
+            });
+        }
+    };
+
+    add("First name", user.firstname.clone(), user.firstname_public);
+    add("Last name", user.lastname.clone(), user.lastname_public);
+    if let Some(birthday) = user.birthday {
+        add("Birthday", birthday.format("%B %-d, %Y").to_string(), user.birthday_public);
+    }
+    add("Gender", user.gender.clone(), true);
+    add("Joined", user.created_at.format("%B %Y").to_string(), true);
+    rows
+}
+
 #[derive(Template)]
 #[template(path = "user.html")]
 struct UserTemplate {
@@ -107,9 +203,26 @@ struct UserTemplate {
     layout: Layout,
     user: User,
     is_own_profile: bool,
+    tab: ProfileTab,
+    tabs: Vec<TabLink>,
+    about: Vec<AboutRow>,
+    /// Only loaded for the posts tab.
+    posts: Vec<Post>,
+    /// Where the like and share buttons come back to.
+    return_to: String,
+}
+
+#[derive(Template)]
+#[template(path = "settings.html")]
+struct SettingsTemplate {
+    title: String,
+    layout: Layout,
+    user: User,
     error: Option<String>,
+    saved: bool,
     image_field: &'static str,
     name_max_chars: usize,
+    bio_max_chars: usize,
     username_max_len: usize,
 }
 
@@ -138,20 +251,56 @@ pub async fn user_page(
     };
 
     let is_own_profile = layout.viewer.as_ref().is_some_and(|viewer| viewer.id == user.id);
-    let error = query
-        .get("error")
-        .and_then(|code| EditError::from_code(code))
-        .filter(|_| is_own_profile)
-        .map(EditError::message);
 
+    let tab = ProfileTab::from_query(query.get("tab"));
+    let posts = if tab == ProfileTab::Posts {
+        let viewer_id = layout.viewer.as_ref().map(|viewer| viewer.id);
+        post::by_author(pool, user.id, viewer_id)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::error!("failed to load posts of {}: {}", user.username, err);
+                Vec::new()
+            })
+    } else {
+        Vec::new()
+    };
     let template = UserTemplate {
         title: format!("{} (@{})", user.display_name(), user.username),
         layout,
+        tab,
+        tabs: tab_links(&user.username, tab),
+        about: about_rows(&user, is_own_profile),
+        posts,
+        return_to: format!("/user/{}", user.username),
         user,
         is_own_profile,
-        error,
+    };
+    render_template(&template)
+}
+
+/// Profile editing, for the signed-in user only. Visitors are sent to the login page.
+pub async fn settings_page(
+    State(state): State<AppState>,
+    session: Session,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let layout = Layout::load(&state, &session).await;
+    let Some(user) = layout.viewer.clone() else {
+        return Redirect::to("/login").into_response();
+    };
+
+    let template = SettingsTemplate {
+        title: "Settings".to_string(),
+        layout,
+        user,
+        error: query
+            .get("error")
+            .and_then(|code| EditError::from_code(code))
+            .map(EditError::message),
+        saved: query.contains_key("saved"),
         image_field: IMAGE_FIELD,
         name_max_chars: NAME_MAX_CHARS,
+        bio_max_chars: BIO_MAX_CHARS,
         username_max_len: USERNAME_MAX_LEN,
     };
     render_template(&template)
@@ -159,7 +308,7 @@ pub async fn user_page(
 
 /// Database pool and signed-in user, or the response to send instead.
 /// Error pages use an empty layout since there is no valid signed-in user.
-async fn signed_in_user(state: &AppState, session: &Session) -> Result<(PgPool, User), Response> {
+pub(crate) async fn signed_in_user(state: &AppState, session: &Session) -> Result<(PgPool, User), Response> {
     let Some(pool) = state.pool.clone() else {
         return Err(error_page(
             Layout::default(),
@@ -187,13 +336,29 @@ async fn signed_in_user(state: &AppState, session: &Session) -> Result<(PgPool, 
     }
 }
 
-/// Usernames are validated (`A-Za-z0-9_`), so they are safe to put in the URL as is.
-fn back_to_profile(username: &str, result: Result<(), EditError>) -> Response {
+fn back_to_settings(result: Result<(), EditError>) -> Response {
     let location = match result {
-        Ok(()) => format!("/user/{username}"),
-        Err(error) => format!("/user/{username}?error={}", error.code()),
+        Ok(()) => "/settings?saved".to_string(),
+        Err(error) => format!("/settings?error={}", error.code()),
     };
     Redirect::to(&location).into_response()
+}
+
+pub async fn update_bio(
+    State(state): State<AppState>,
+    session: Session,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+
+    let result = match user::validate_bio(form.get("bio").map(String::as_str).unwrap_or("")) {
+        Some(bio) => user::update_bio(&pool, me.id, &bio).await.map_err(server_error),
+        None => Err(EditError::InvalidBio),
+    };
+    back_to_settings(result)
 }
 
 pub async fn update_names(
@@ -215,7 +380,7 @@ pub async fn update_names(
         }
         _ => Err(EditError::InvalidName),
     };
-    back_to_profile(&me.username, result)
+    back_to_settings(result)
 }
 
 pub async fn update_username(
@@ -230,16 +395,16 @@ pub async fn update_username(
 
     let raw_username = form.get("username").map(String::as_str).unwrap_or("");
     let Some(username) = user::validate_username(raw_username) else {
-        return back_to_profile(&me.username, Err(EditError::InvalidUsername));
+        return back_to_settings(Err(EditError::InvalidUsername));
     };
     if username == me.username {
-        return back_to_profile(&me.username, Ok(()));
+        return back_to_settings(Ok(()));
     }
 
     match user::update_username(&pool, me.id, &username).await {
-        Ok(true) => back_to_profile(&username, Ok(())),
-        Ok(false) => back_to_profile(&me.username, Err(EditError::UsernameTaken)),
-        Err(err) => back_to_profile(&me.username, Err(server_error(err))),
+        Ok(true) => back_to_settings(Ok(())),
+        Ok(false) => back_to_settings(Err(EditError::UsernameTaken)),
+        Err(err) => back_to_settings(Err(server_error(err))),
     }
 }
 
@@ -256,17 +421,17 @@ async fn upload_image(
 
     let url = match image::save_user_image(me.id, image, &mut multipart).await {
         Ok(url) => url,
-        Err(err) => return back_to_profile(&me.username, Err(err.into())),
+        Err(err) => return back_to_settings(Err(err.into())),
     };
 
     if let Err(err) = user::update_image(&pool, me.id, image, Some(&url)).await {
         image::remove_user_image(me.id, &url).await;
-        return back_to_profile(&me.username, Err(server_error(err)));
+        return back_to_settings(Err(server_error(err)));
     }
     if let Some(old_url) = me.image_url(image) {
         image::remove_user_image(me.id, old_url).await;
     }
-    back_to_profile(&me.username, Ok(()))
+    back_to_settings(Ok(()))
 }
 
 async fn remove_image(state: AppState, session: Session, image: ProfileImage) -> Response {
@@ -276,12 +441,12 @@ async fn remove_image(state: AppState, session: Session, image: ProfileImage) ->
     };
 
     if let Err(err) = user::update_image(&pool, me.id, image, None).await {
-        return back_to_profile(&me.username, Err(server_error(err)));
+        return back_to_settings(Err(server_error(err)));
     }
     if let Some(old_url) = me.image_url(image) {
         image::remove_user_image(me.id, old_url).await;
     }
-    back_to_profile(&me.username, Ok(()))
+    back_to_settings(Ok(()))
 }
 
 pub async fn upload_photo(

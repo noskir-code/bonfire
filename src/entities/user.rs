@@ -1,8 +1,16 @@
-use sqlx::{PgPool, Row, postgres::PgRow, types::chrono::NaiveDate};
+use sqlx::{
+    PgPool, Row,
+    postgres::PgRow,
+    types::chrono::{DateTime, NaiveDate, Utc},
+};
+
+use crate::entities::schema::{Column, Index, Table};
 
 pub const USERNAME_MIN_LEN: usize = 3;
 pub const USERNAME_MAX_LEN: usize = 30;
 pub const NAME_MAX_CHARS: usize = 64;
+/// Same limit as Mastodon.
+pub const BIO_MAX_CHARS: usize = 500;
 pub const EMAIL_MAX_LEN: usize = 254;
 pub const PASSWORD_MIN_CHARS: usize = 10;
 /// Argon2 accepts more, this only stops absurdly long inputs.
@@ -10,24 +18,110 @@ pub const PASSWORD_MAX_CHARS: usize = 128;
 pub const MIN_AGE_YEARS: u32 = 13;
 pub const MAX_AGE_YEARS: u32 = 130;
 
+const EMAIL_INDEX: &str = "users_email_lower_idx";
+
+/// Columns loaded into `User`. A macro so it can be used in `concat!`,
+/// sqlx only accepts SQL known at compile time.
+/// `user_columns!("u.")` prefixes every column, for queries joining `users AS u`.
+macro_rules! user_columns {
+    () => {
+        user_columns!("")
+    };
+    ($prefix:literal) => {
+        concat!(
+            $prefix, "id, ", $prefix, "username, ", $prefix, "displayname, ",
+            $prefix, "firstname, ", $prefix, "lastname, ", $prefix, "birthday, ",
+            $prefix, "gender, ", $prefix, "bio, ", $prefix, "firstname_public, ",
+            $prefix, "lastname_public, ", $prefix, "birthday_public, ",
+            $prefix, "photo_url, ", $prefix, "background_url, ", $prefix, "created_at"
+        )
+    };
+}
+pub(crate) use user_columns;
+
+/// Kept up to date automatically at startup, see `entities::schema`.
+pub const TABLE: Table = Table {
+    name: "users",
+    columns: &[
+        Column::new("id", "SERIAL").primary_key(),
+        // Random 16-digit id that can be shown publicly, unlike `id`.
+        Column::new("public_id", "BIGINT")
+            .default("1000000000000000 + (random() * 8999999999999999)::bigint"),
+        Column::new("username", "TEXT"),
+        Column::new("displayname", "TEXT").default("''"),
+        Column::new("firstname", "TEXT").default("''"),
+        Column::new("lastname", "TEXT").default("''"),
+        // Nullable for accounts created before it was asked at signup.
+        Column::new("birthday", "DATE").nullable(),
+        Column::new("gender", "TEXT").default("''"),
+        Column::new("bio", "TEXT").default("''"),
+        // Privacy: what other users can see on the profile.
+        Column::new("firstname_public", "BOOLEAN").default("TRUE"),
+        Column::new("lastname_public", "BOOLEAN").default("TRUE"),
+        Column::new("birthday_public", "BOOLEAN").default("TRUE"),
+        Column::new("role", "TEXT").default("'user'"),
+        // Nullable for accounts created before login existed, they can't sign in.
+        Column::new("email", "TEXT").nullable(),
+        Column::new("password_hash", "TEXT").nullable(),
+        Column::new("email_verified", "BOOLEAN").default("FALSE"),
+        Column::new("email_verification_token", "TEXT").nullable(),
+        Column::new("email_verification_sent_at", "TIMESTAMPTZ").nullable(),
+        Column::new("email_verification_expires_at", "TIMESTAMPTZ").nullable(),
+        Column::new("email_verified_at", "TIMESTAMPTZ").nullable(),
+        Column::new("photo_url", "TEXT").nullable(),
+        // CSS applied to the image, to crop or move it.
+        Column::new("photo_style", "TEXT").default("''"),
+        Column::new("background_url", "TEXT").nullable(),
+        Column::new("background_style", "TEXT").default("''"),
+        // ActivityPub actor. Nullable until the keys and URLs are generated.
+        Column::new("ap_id", "TEXT").nullable(),
+        Column::new("ap_inbox", "TEXT").nullable(),
+        Column::new("ap_outbox", "TEXT").nullable(),
+        Column::new("ap_public_key", "TEXT").nullable(),
+        Column::new("ap_private_key", "TEXT").nullable(),
+        // FALSE for users from other servers.
+        Column::new("ap_local", "BOOLEAN").default("TRUE"),
+        Column::new("ap_last_refreshed_at", "TIMESTAMPTZ").default("NOW()"),
+        Column::new("federation_enabled", "BOOLEAN").default("TRUE"),
+        Column::new("federation_display_name_mode", "TEXT").default("'full_name'"),
+        Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
+    ],
+    indexes: &[
+        // Like Mastodon: case is kept, but "Alice" and "alice" can't both exist.
+        Index::unique("users_username_lower_idx", "LOWER(username)"),
+        Index::unique(EMAIL_INDEX, "LOWER(email)"),
+        Index::unique("users_public_id_idx", "public_id"),
+        Index::unique("users_email_verification_token_idx", "email_verification_token"),
+        // Searching users by name.
+        Index::new("users_displayname_lower_idx", "LOWER(displayname)"),
+        Index::new("users_role_idx", "role"),
+    ],
+};
+
 #[derive(Clone, Debug)]
 pub struct User {
     pub id: i32,
-    /// Case is kept, but unique ignoring case, see `migrations/`.
+    /// Case is kept, but unique ignoring case, see `TABLE`.
     pub username: String,
     /// Name shown on the profile, can be empty.
     pub displayname: String,
     pub firstname: String,
     pub lastname: String,
-    /// Asked at signup, `None` for accounts created before that. Not displayed or edited yet.
-    #[allow(dead_code)]
+    /// Asked at signup, `None` for accounts created before that.
     pub birthday: Option<NaiveDate>,
+    pub gender: String,
+    pub bio: String,
+    // Privacy: whether other users can see these on the profile.
+    pub firstname_public: bool,
+    pub lastname_public: bool,
+    pub birthday_public: bool,
     pub photo_url: Option<String>,
     pub background_url: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl User {
-    fn from_row(row: &PgRow) -> Result<Self, sqlx::Error> {
+    pub fn from_row(row: &PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
             id: row.try_get("id")?,
             username: row.try_get("username")?,
@@ -35,21 +129,32 @@ impl User {
             firstname: row.try_get("firstname")?,
             lastname: row.try_get("lastname")?,
             birthday: row.try_get("birthday")?,
+            gender: row.try_get("gender")?,
+            bio: row.try_get("bio")?,
+            firstname_public: row.try_get("firstname_public")?,
+            lastname_public: row.try_get("lastname_public")?,
+            birthday_public: row.try_get("birthday_public")?,
             photo_url: row.try_get("photo_url")?,
             background_url: row.try_get("background_url")?,
+            created_at: row.try_get("created_at")?,
         })
     }
 
-    /// "First Last", skipping the empty parts.
+    /// "First Last", skipping the empty and private parts.
     pub fn full_name(&self) -> String {
-        [self.firstname.as_str(), self.lastname.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
+        [
+            (self.firstname.as_str(), self.firstname_public),
+            (self.lastname.as_str(), self.lastname_public),
+        ]
+        .into_iter()
+        .filter(|(part, public)| *public && !part.is_empty())
+        .map(|(part, _)| part)
             .collect::<Vec<_>>()
             .join(" ")
     }
 
-    /// The display name, else the full name, else the username.
+    /// The display name, else the public parts of the full name, else the username.
+    /// Shown to everyone, so it never contains a private name.
     pub fn display_name(&self) -> String {
         if !self.displayname.is_empty() {
             return self.displayname.clone();
@@ -103,6 +208,18 @@ pub fn validate_username(raw: &str) -> Option<String> {
         .bytes()
         .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
     (valid_length && valid_chars).then(|| username.to_string())
+}
+
+/// Trims the bio, keeps its line breaks, and rejects other control characters
+/// or bios that are too long. An empty bio is valid: it removes the bio.
+pub fn validate_bio(raw: &str) -> Option<String> {
+    // Browsers send line breaks as \r\n.
+    let bio = raw.trim().replace("\r\n", "\n");
+    let valid = bio.chars().count() <= BIO_MAX_CHARS
+        && !bio
+            .chars()
+            .any(|letter| letter.is_control() && !matches!(letter, '\n' | '\t'));
+    valid.then_some(bio)
 }
 
 /// Trims the name and rejects control characters or names that are too long.
@@ -185,11 +302,12 @@ pub enum CreateAccountError {
 }
 
 pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User, CreateAccountError> {
-    let result = sqlx::query(
+    let result = sqlx::query(concat!(
         "INSERT INTO users (username, email, password_hash, firstname, lastname, birthday)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, username, displayname, firstname, lastname, birthday, photo_url, background_url",
-    )
+         RETURNING ",
+        user_columns!()
+    ))
     .bind(&account.username)
     .bind(&account.email)
     .bind(&account.password_hash)
@@ -203,7 +321,7 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User,
         Ok(row) => User::from_row(&row).map_err(CreateAccountError::Database),
         Err(err) if is_unique_violation(&err) => {
             let constraint = err.as_database_error().and_then(|db_err| db_err.constraint());
-            if constraint == Some("users_email_lower_idx") {
+            if constraint == Some(EMAIL_INDEX) {
                 Err(CreateAccountError::EmailTaken)
             } else {
                 Err(CreateAccountError::UsernameTaken)
@@ -233,10 +351,7 @@ pub async fn find_credentials(
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query(
-        "SELECT id, username, displayname, firstname, lastname, birthday, photo_url, background_url
-         FROM users WHERE id = $1",
-    )
+    sqlx::query(concat!("SELECT ", user_columns!(), " FROM users WHERE id = $1"))
         .bind(id)
         .fetch_optional(pool)
         .await?
@@ -246,10 +361,11 @@ pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<User>, sqlx::Er
 }
 
 pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query(
-        "SELECT id, username, displayname, firstname, lastname, birthday, photo_url, background_url
-         FROM users WHERE LOWER(username) = LOWER($1)",
-    )
+    sqlx::query(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users WHERE LOWER(username) = LOWER($1)"
+    ))
     .bind(username.trim())
     .fetch_optional(pool)
     .await?
@@ -269,6 +385,15 @@ pub async fn update_names(
         .bind(displayname)
         .bind(firstname)
         .bind(lastname)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_bio(pool: &PgPool, id: i32, bio: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET bio = $1 WHERE id = $2")
+        .bind(bio)
         .bind(id)
         .execute(pool)
         .await?;

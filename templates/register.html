@@ -1,14 +1,13 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %} {% import "macros/form.html" as form %} {% block content %}
 <section class="box content auth">
     <h1>Register</h1>
-    {% if let Some(message) = error %}
-    <p class="error">{{ message }}</p>
-    {% endif %}
+    {% call form::general(self.general_errors()) %}{% endcall %}
 
     <form action="/register" method="post">
         <label for="username">Username</label>
         <input
             id="username"
+            {% call form::invalid("username", self.error_for("username")) %}{% endcall %}
             type="text"
             name="username"
             value="{{ username }}"
@@ -17,9 +16,11 @@
             autocomplete="username"
             required
         />
+        {% call form::message("username", self.error_for("username")) %}{% endcall %}
         <label for="email">Email</label>
         <input
             id="email"
+            {% call form::invalid("email", self.error_for("email")) %}{% endcall %}
             type="email"
             name="email"
             value="{{ email }}"
@@ -27,9 +28,11 @@
             autocomplete="email"
             required
         />
+        {% call form::message("email", self.error_for("email")) %}{% endcall %}
         <label for="firstname">First name</label>
         <input
             id="firstname"
+            {% call form::invalid("firstname", self.error_for("firstname")) %}{% endcall %}
             type="text"
             name="firstname"
             value="{{ firstname }}"
@@ -37,9 +40,11 @@
             autocomplete="given-name"
             required
         />
+        {% call form::message("firstname", self.error_for("firstname")) %}{% endcall %}
         <label for="lastname">Last name</label>
         <input
             id="lastname"
+            {% call form::invalid("lastname", self.error_for("lastname")) %}{% endcall %}
             type="text"
             name="lastname"
             value="{{ lastname }}"
@@ -47,9 +52,11 @@
             autocomplete="family-name"
             required
         />
+        {% call form::message("lastname", self.error_for("lastname")) %}{% endcall %}
         <label for="birthday">Birthday</label>
         <input
             id="birthday"
+            {% call form::invalid("birthday", self.error_for("birthday")) %}{% endcall %}
             type="date"
             name="birthday"
             value="{{ birthday }}"
@@ -57,9 +64,11 @@
             autocomplete="bday"
             required
         />
+        {% call form::message("birthday", self.error_for("birthday")) %}{% endcall %}
         <label for="password">Password</label>
         <input
             id="password"
+            {% call form::invalid("password", self.error_for("password")) %}{% endcall %}
             type="password"
             name="password"
             minlength="{{ password_min_chars }}"
@@ -67,9 +76,11 @@
             autocomplete="new-password"
             required
         />
+        {% call form::message("password", self.error_for("password")) %}{% endcall %}
         <label for="password_confirm">Confirm password</label>
         <input
             id="password_confirm"
+            {% call form::invalid("password_confirm", self.error_for("password_confirm")) %}{% endcall %}
             type="password"
             name="password_confirm"
             minlength="{{ password_min_chars }}"
@@ -77,6 +88,7 @@
             autocomplete="new-password"
             required
         />
+        {% call form::message("password_confirm", self.error_for("password_confirm")) %}{% endcall %}
         <button type="submit" class="button">Create account</button>
     </form>
     <p>Already have an account? <a href="/login">Login</a></p>

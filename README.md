@@ -34,9 +34,6 @@ It also add native bridges to other protocols like:
 https://instavox.social/
 
 
-### Current version:
- - 0.0.2
-
 ## Roadmap to the v1
 
  - (Current step) 0.1 > the first fully operational function (Content-Aggregator)
