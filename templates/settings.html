@@ -8,6 +8,32 @@
     {% endif %}
     <p><a href="/user/{{ user.username }}">See your profile</a></p>
 
+    <form action="/settings/bio" method="post">
+        <label for="bio">Bio</label>
+        <textarea
+            id="bio"
+            name="bio"
+            rows="4"
+            maxlength="{{ bio_max_chars }}"
+            placeholder="A few words about you, shown in &quot;About me&quot;."
+        >{{ user.bio }}</textarea>
+        <button type="submit" class="button">Save bio</button>
+    </form>
+
+    <form action="/settings/username" method="post">
+        <label for="username">Username</label>
+        <input
+            id="username"
+            type="text"
+            name="username"
+            value="{{ user.username }}"
+            maxlength="{{ username_max_len }}"
+            pattern="[A-Za-z0-9_]+"
+            required
+        />
+        <button type="submit" class="button">Save username</button>
+    </form>
+
     <form action="/settings/names" method="post">
         <label for="displayname">Display name</label>
         <input
@@ -34,32 +60,6 @@
             maxlength="{{ name_max_chars }}"
         />
         <button type="submit" class="button">Save names</button>
-    </form>
-
-    <form action="/settings/bio" method="post">
-        <label for="bio">Bio</label>
-        <textarea
-            id="bio"
-            name="bio"
-            rows="4"
-            maxlength="{{ bio_max_chars }}"
-            placeholder="A few words about you, shown in &quot;About me&quot;."
-        >{{ user.bio }}</textarea>
-        <button type="submit" class="button">Save bio</button>
-    </form>
-
-    <form action="/settings/username" method="post">
-        <label for="username">Username</label>
-        <input
-            id="username"
-            type="text"
-            name="username"
-            value="{{ user.username }}"
-            maxlength="{{ username_max_len }}"
-            pattern="[A-Za-z0-9_]+"
-            required
-        />
-        <button type="submit" class="button">Save username</button>
     </form>
 
     <form action="/settings/photo" method="post" enctype="multipart/form-data">

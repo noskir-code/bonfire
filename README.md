@@ -46,3 +46,5 @@ https://instavox.social/
  - 0.8 > Video
  - 0.9 > Live Streaming
  - 0.10 > CLI configuration
+
+ - v1.0 > Fully functional system that shows contents and users from other instances with multi-user links and notifier that notifies the publication of new content by users.
