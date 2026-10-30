@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{% block title %}{{ title }} - Bonfire{% endblock %}</title>
+        <title>{% block title %}{{ title }} - Tison{% endblock %}</title>
         <link rel="shortcut icon" href="/public/favicon.ico" type="image/x-icon">
         {% block stylesheets %}
         <link rel="stylesheet" href="/assets/style.css" />
@@ -18,7 +18,7 @@
     <body>
         <div class="grid horizontal page end fixed full-width">
             <div class="flex full height center side infos vertical">
-                <header><img src="/public/logo.png" alt="Logo" class="logo"><div>Bonfire</div></header>
+                <header><img src="/public/logo.png" alt="Logo" class="logo"><div>Tison</div></header>
                 <nav>
                     {% if let Some(viewer) = layout.viewer %}
                     <a href="/user/{{ viewer.username }}" class="flex center">
@@ -47,7 +47,7 @@
                 </nav>
                 <div class="flex bottom center vertical">
                     <!-- Versions -->
-                    <div>Bonfire Protocol &middot; v.0.1.29</div>
+                    <div>Tison Protocol &middot; v.0.1.29</div>
                     <div class="flex wrap space-around infos">
                         <a href="/terms-of-use">&bull;Terms of Use</a>
                         <a href="/privacy-policy">&bull;Privacy Policy</a>
