@@ -1,6 +1,6 @@
 {% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
 {% call posts_ui::composer(composer) %}{% endcall %}
 <div class="flex center vertical full-width posts">
-    {% call posts_ui::post_list(posts, "Your feed is empty, write your first post above.", true, "/your-feed") %}{% endcall %}
+    {% call posts_ui::post_list(posts, "Your feed is empty, write your first post above.", true, "/your-feed", false) %}{% endcall %}
 </div>
 {% endblock %}

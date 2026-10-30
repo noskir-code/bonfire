@@ -5,14 +5,30 @@ use std::{
 
 use axum::extract::Multipart;
 
-use crate::entities::user::ProfileImage;
 
 pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// Multipart field holding the uploaded file.
 pub const IMAGE_FIELD: &str = "image";
 
-const UPLOADS_DIR: &str = "public/uploads/users";
-const UPLOADS_URL: &str = "/public/uploads/users";
+const UPLOADS_DIR: &str = "public/uploads";
+const UPLOADS_URL: &str = "/public/uploads";
+
+/// Whose folder an uploaded image goes in.
+#[derive(Clone, Copy, Debug)]
+pub enum ImageOwner {
+    User(i32),
+    Community(i64),
+}
+
+impl ImageOwner {
+    /// Folder under the uploads, like `users/12`.
+    fn folder(self) -> String {
+        match self {
+            Self::User(id) => format!("users/{id}"),
+            Self::Community(id) => format!("communities/{id}"),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ImageError {
@@ -62,12 +78,9 @@ async fn read_image_field(multipart: &mut Multipart) -> Result<Vec<u8>, ImageErr
     Err(ImageError::Missing)
 }
 
-/// Saves the uploaded image in the user's folder and returns its public URL.
-pub async fn save_user_image(
-    user_id: i32,
-    image: ProfileImage,
-    multipart: &mut Multipart,
-) -> Result<String, ImageError> {
+/// Saves the uploaded image in the owner's folder and returns its public URL.
+/// `kind` starts the file name, like `photo`.
+pub async fn save_image(owner: ImageOwner, kind: &str, multipart: &mut Multipart) -> Result<String, ImageError> {
     let data = read_image_field(multipart).await?;
     let extension = detect_extension(&data).ok_or(ImageError::UnsupportedFormat)?;
 
@@ -75,9 +88,10 @@ pub async fn save_user_image(
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let file_name = format!("{}-{nanos}.{extension}", image.as_str());
+    let file_name = format!("{kind}-{nanos}.{extension}");
 
-    let dir = PathBuf::from(UPLOADS_DIR).join(user_id.to_string());
+    let folder = owner.folder();
+    let dir = PathBuf::from(UPLOADS_DIR).join(&folder);
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(ImageError::Io)?;
@@ -85,13 +99,14 @@ pub async fn save_user_image(
         .await
         .map_err(ImageError::Io)?;
 
-    Ok(format!("{UPLOADS_URL}/{user_id}/{file_name}"))
+    Ok(format!("{UPLOADS_URL}/{folder}/{file_name}"))
 }
 
-/// Deletes a file previously returned by `save_user_image`.
-/// URLs outside the user's upload folder are ignored.
-pub async fn remove_user_image(user_id: i32, url: &str) {
-    let prefix = format!("{UPLOADS_URL}/{user_id}/");
+/// Deletes a file previously returned by `save_image`.
+/// URLs outside the owner's upload folder are ignored.
+pub async fn remove_image(owner: ImageOwner, url: &str) {
+    let folder = owner.folder();
+    let prefix = format!("{UPLOADS_URL}/{folder}/");
     let Some(file_name) = url.strip_prefix(&prefix) else {
         return;
     };
@@ -99,9 +114,7 @@ pub async fn remove_user_image(user_id: i32, url: &str) {
         return;
     }
 
-    let path = PathBuf::from(UPLOADS_DIR)
-        .join(user_id.to_string())
-        .join(file_name);
+    let path = PathBuf::from(UPLOADS_DIR).join(&folder).join(file_name);
     if let Err(err) = tokio::fs::remove_file(&path).await {
         tracing::warn!("failed to remove {}: {}", path.display(), err);
     }

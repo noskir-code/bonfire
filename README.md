@@ -36,15 +36,15 @@ https://instavox.social/
 
 ## Roadmap to the v1
 
- - (Current step) 0.1 > the first fully operational function (Content-Aggregator)
- - 0.2 > DFRN
- - 0.3 > Macro blogging
- - 0.4 > Image
- - 0.5 > Publishing
- - 0.6 > Audio streaming
- - 0.7 > Event planning
- - 0.8 > Video
- - 0.9 > Live Streaming
- - 0.10 > CLI configuration
+ - (Finished) v0.1 > the first fully operational function (Content-Aggregator)
+ - (Current) v0.2 > DFRN
+ - v0.3 > Macro blogging
+ - v0.4 > Image
+ - v0.5 > Publishing
+ - v0.6 > Audio streaming
+ - v0.7 > Event planning
+ - v0.8 > Video
+ - v0.9 > Live Streaming
+ - v0.10 > CLI configuration
 
  - v1.0 > Fully functional system that shows contents and users from other instances with multi-user links and notifier that notifies the publication of new content by users.

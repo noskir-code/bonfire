@@ -10,8 +10,12 @@ use tower_sessions::Session;
 
 use crate::{
     AppState,
-    entities::post::{self, Reaction},
+    entities::{
+        notification,
+        post::{self, Reaction},
+    },
     handlers::{
+        notifier,
         system::{Layout, error_page, local_path},
         user::signed_in_user,
     },
@@ -32,7 +36,16 @@ async fn react(
     };
 
     match post::toggle(&pool, reaction, post_id, me.id).await {
-        Ok(Some(_)) => {
+        Ok(Some(toggled)) => {
+            let notified = if toggled.active {
+                notification::reaction_added(&pool, reaction, post_id, me.id).await
+            } else {
+                notification::reaction_removed(&pool, reaction, post_id, me.id).await
+            };
+            if let Err(err) = notified {
+                tracing::warn!("failed to update notification of {:?} on post {}: {}", reaction, post_id, err);
+            }
+            notifier::reaction_changed(&state, &pool, &me, post_id, reaction, toggled).await;
             let back = local_path(form.get("return"), "/");
             Redirect::to(&format!("{back}#post-{post_id}")).into_response()
         }

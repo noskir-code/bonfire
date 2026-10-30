@@ -1,0 +1,51 @@
+<!doctype html>
+{#
+    Layout of every HTML email. The classes come from assets/email.css and are
+    turned into inline styles when the email is rendered (email clients ignore
+    stylesheets). The layout uses tables, the way every client displays the same.
+    Needs `site_url` in the email's template struct.
+#}
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light" />
+        <title>{% block title %}Bonfire{% endblock %}</title>
+    </head>
+    <body class="page">
+        <div class="preview">{% block preview %}{% endblock %}</div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="outer">
+            <tr>
+                <td align="center" class="outer-cell">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="card">
+                        <tr>
+                            <td class="brand-cell">
+                                {# Emails are read outside the site: the logo needs the full
+                                   address, so PUBLIC_BASE_URL must be reachable by the reader.
+                                   Some clients hide remote images until asked: the name stays. #}
+                                <table role="presentation" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td class="brand-logo-cell">
+                                            <a href="{{ site_url }}"><img src="{{ site_url }}/public/logo.png" width="32" height="32" alt="Logo" class="brand-logo" /></a>
+                                        </td>
+                                        <td>
+                                            <a href="{{ site_url }}" class="brand">Bonfire</a>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="content">
+                                {% block content %}{% endblock %}
+                            </td>
+                        </tr>
+                    </table>
+                    <p class="footer">
+                        {% block footer %}You receive this email because of an action on your Bonfire account.{% endblock %}
+                    </p>
+                </td>
+            </tr>
+        </table>
+    </body>
+</html>

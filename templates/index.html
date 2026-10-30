@@ -12,6 +12,6 @@
 </section>
 {% endif %}
 <div class="flex center vertical full-width posts">
-    {% call posts_ui::post_list(posts, "Nobody has posted yet.", layout.viewer.is_some(), "/") %}{% endcall %}
+    {% call posts_ui::post_list(posts, "Nobody has posted yet.", layout.viewer.is_some(), "/", false) %}{% endcall %}
 </div>
 {% endblock %}

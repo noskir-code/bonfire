@@ -92,6 +92,21 @@ nav a:hover, a.page-link:hover {
     background-color: var(--button);
 }
 
+/* Unread notifications, next to the menu link. */
+.badge {
+    margin-left: 0.5em;
+    padding: 0.1em 0.5em;
+    border-radius: 1em;
+    background-color: hsl(5, 75%, 50%);
+    color: white;
+    font-size: 0.8em;
+    font-weight: bold;
+}
+
+.badge[hidden] {
+    display: none;
+}
+
 .box {
     padding: 1em 1.5em;
     border-radius: 0.5em;
@@ -599,6 +614,60 @@ Post actions and comments
     margin: 0.5em 0 0;
 }
 
+/* On a profile: the post a comment answers. */
+.comment-context {
+    display: block;
+    padding: 0.5em 0.75em;
+    border-left: solid 0.2em var(--button);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.comment-excerpt {
+    display: block;
+    margin-top: 0.25em;
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+}
+
+.comment > .post-meta {
+    display: block;
+    margin-top: 0.5em;
+}
+
+/* Replies, under the comment on the post they come from. */
+.comment-replies {
+    margin-left: 1.5em;
+    padding-left: 1em;
+    border-left: solid 0.15em var(--button);
+}
+
+.reply-context {
+    display: inline-block;
+    margin-top: 0.4em;
+    font-size: 0.9em;
+    color: var(--light-text);
+    text-decoration: none;
+}
+
+.reply-context:hover {
+    text-decoration: underline;
+}
+
+.reply-link {
+    margin-top: 0.25em;
+    margin-left: -0.8em;
+}
+
+.reply-banner {
+    margin: 0;
+    color: var(--light-text);
+}
+
+.reply-banner[hidden] {
+    display: none;
+}
+
 .comment-form {
     display: flex;
     flex-direction: column;
@@ -623,4 +692,367 @@ Post actions and comments
 
 .auth label.checkbox input {
     width: auto;
+}
+
+/*
+Notifications
+*/
+
+.notifications {
+    width: 100%;
+    max-width: 40em;
+}
+
+.notifications-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+
+.notifications-actions {
+    display: flex;
+    gap: 0.25em;
+}
+
+.notifications [hidden] {
+    display: none;
+}
+
+.notification-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.notification {
+    display: flex;
+    align-items: flex-start;
+    border-bottom: solid 0.1em var(--button);
+}
+
+.notification-link {
+    display: flex;
+    flex: 1;
+    align-items: flex-start;
+    gap: 0.75em;
+    min-width: 0;
+    padding: 0.75em;
+    color: var(--text);
+    text-decoration: none;
+}
+
+/* Keeps its size next to a long text. */
+.notification .nav-avatar {
+    flex-shrink: 0;
+}
+
+.notification-link:hover {
+    background-color: var(--button);
+}
+
+/* Unread: a colored edge, not only a color change. */
+.notification.unread {
+    border-left: solid 0.25em hsl(5, 75%, 50%);
+    background-color: var(--background);
+}
+
+.notification-delete {
+    padding: 0.5em 0.25em;
+}
+
+/* Added live: fades in so it's noticed. */
+.notification.arriving {
+    animation: notification-arrive 1.2s ease-out;
+}
+
+@keyframes notification-arrive {
+    from {
+        background-color: var(--button);
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .notification.arriving {
+        animation: none;
+    }
+}
+
+.load-older {
+    display: block;
+    margin-top: 0.5em;
+    text-align: center;
+}
+
+.notification-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    min-width: 0;
+}
+
+.notification-excerpt {
+    color: var(--light-text);
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+}
+
+/*
+Communities
+*/
+
+/* Narrow enough to stay clear of the fixed menu on the left. */
+.communities,
+.community-header,
+.community-layout {
+    width: 100%;
+    max-width: 50em;
+    box-sizing: border-box;
+}
+
+.community-search {
+    display: flex;
+    gap: 0.5em;
+    margin-bottom: 1em;
+}
+
+.community-search input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.4em;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+}
+
+.community-list,
+.community-moderators {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.community-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75em;
+    padding: 0.75em;
+    border-bottom: solid 0.1em var(--button);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.community-card:hover {
+    background-color: var(--button);
+}
+
+.community-card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    min-width: 0;
+}
+
+.community-card-description {
+    color: var(--light-text);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.community-photo {
+    width: 5em;
+    height: 5em;
+    flex-shrink: 0;
+    border-radius: 0.75em;
+    object-fit: cover;
+}
+
+.community-photo.small {
+    width: 2.75em;
+    height: 2.75em;
+    border-radius: 0.5em;
+}
+
+.community-photo.placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2em;
+    font-weight: bold;
+    background-color: var(--button);
+    color: var(--text);
+}
+
+.community-photo.small.placeholder {
+    font-size: 1.2em;
+}
+
+.community-identity {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+}
+
+.community-identity h1 {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.community-identity p {
+    margin: 0.25em 0 0;
+}
+
+.community-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+    margin-top: 1em;
+}
+
+/* Posts first, the about / rules / moderators column on the side, below on phones. */
+.community-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 15em;
+    gap: 1em;
+    margin-top: 1em;
+}
+
+@media (max-width: 50em) {
+    .community-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.community-main > .box {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.community-main .composer form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5em;
+}
+
+.community-main .composer textarea {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.community-main .posts > .post {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.community-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+}
+
+.community-side > .box {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.community-side h2 {
+    margin-top: 0;
+    font-size: 1.1em;
+}
+
+.community-sorts {
+    margin-top: 1em;
+}
+
+.community-rule summary {
+    cursor: pointer;
+    padding: 0.25em 0;
+}
+
+.community-moderators li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4em;
+    padding: 0.25em 0;
+}
+
+.post-community {
+    margin: 0.25em 0 0;
+    font-size: 0.9em;
+    color: var(--light-text);
+}
+
+.field-help {
+    width: 100%;
+    margin: 0;
+    font-size: 0.9em;
+    color: var(--light-text);
+    overflow-wrap: anywhere;
+}
+
+.choices {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+.choices legend {
+    font-weight: bold;
+    margin-bottom: 0.25em;
+}
+
+.profile-edit .choices label {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    font-weight: normal;
+}
+
+.profile-edit .choices input,
+.profile-edit .checkbox input {
+    flex: none;
+    min-width: 0;
+}
+
+.profile-edit input.order {
+    flex: none;
+    width: 6em;
+    min-width: 0;
+}
+
+.profile-edit .checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    font-weight: normal;
+}
+
+form.inline {
+    display: inline;
+    margin: 0;
+}
+
+.button.danger,
+.action.danger {
+    color: hsl(0, 70%, 40%);
+}
+
+@media (prefers-color-scheme: dark) {
+    .button.danger,
+    .action.danger {
+        color: hsl(0, 80%, 70%);
+    }
+}
+
+.danger-zone p {
+    width: 100%;
+    margin: 0;
 }

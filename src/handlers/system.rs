@@ -8,8 +8,8 @@ use tower_sessions::Session;
 
 use crate::{
     AppState,
-    entities::user::{self, User},
-    handlers::session::current_user_id,
+    entities::{notification, user::User},
+    handlers::session::signed_in,
 };
 
 /// Data needed by `base.html` on every page.
@@ -17,19 +17,37 @@ use crate::{
 pub struct Layout {
     /// Signed-in user, `None` for visitors.
     pub viewer: Option<User>,
+    /// Shown next to "Notifications" in the menu, 0 for visitors.
+    pub unread_notifications: i64,
 }
 
 impl Layout {
     pub async fn load(state: &AppState, session: &Session) -> Self {
-        let (Some(pool), Some(user_id)) = (&state.pool, current_user_id(session).await) else {
+        let Some(pool) = &state.pool else {
             return Self::default();
         };
-        match user::find_by_id(pool, user_id).await {
-            Ok(viewer) => Self { viewer },
+        let viewer = match signed_in(pool, session).await {
+            Ok(viewer) => viewer,
             Err(err) => {
-                tracing::warn!("failed to load signed-in user {}: {}", user_id, err);
-                Self::default()
+                tracing::warn!("failed to load signed-in user: {}", err);
+                return Self::default();
             }
+        };
+        let unread_notifications = match &viewer {
+            Some(viewer) => notification::unread_count(pool, viewer.id).await.unwrap_or_else(|err| {
+                tracing::warn!("failed to count notifications: {}", err);
+                0
+            }),
+            None => 0,
+        };
+        Self { viewer, unread_notifications }
+    }
+
+    /// The count as shown in the menu: "99+" past 99.
+    pub fn unread_label(&self) -> String {
+        match self.unread_notifications {
+            count if count > 99 => "99+".to_string(),
+            count => count.to_string(),
         }
     }
 }

@@ -33,7 +33,9 @@ macro_rules! user_columns {
             $prefix, "firstname, ", $prefix, "lastname, ", $prefix, "birthday, ",
             $prefix, "gender, ", $prefix, "bio, ", $prefix, "firstname_public, ",
             $prefix, "lastname_public, ", $prefix, "birthday_public, ",
-            $prefix, "photo_url, ", $prefix, "background_url, ", $prefix, "created_at"
+            $prefix, "photo_url, ", $prefix, "background_url, ", $prefix, "created_at, ",
+            $prefix, "session_version, ", $prefix, "public_id, ",
+            $prefix, "federation_enabled, ", $prefix, "role"
         )
     };
 }
@@ -63,6 +65,9 @@ pub const TABLE: Table = Table {
         // Nullable for accounts created before login existed, they can't sign in.
         Column::new("email", "TEXT").nullable(),
         Column::new("password_hash", "TEXT").nullable(),
+        // Increased when the password changes: sessions signed in with an
+        // older value are signed out, see `handlers::session::signed_in`.
+        Column::new("session_version", "INTEGER").default("0"),
         Column::new("email_verified", "BOOLEAN").default("FALSE"),
         Column::new("email_verification_token", "TEXT").nullable(),
         Column::new("email_verification_sent_at", "TIMESTAMPTZ").nullable(),
@@ -118,6 +123,13 @@ pub struct User {
     pub photo_url: Option<String>,
     pub background_url: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub session_version: i32,
+    /// Never changes, unlike the username: used in Fediverse addresses.
+    pub public_id: i64,
+    /// Whether other Fediverse servers can find and follow the account.
+    pub federation_enabled: bool,
+    /// `user`, or `moderator` / `admin` for the site's staff.
+    pub role: String,
 }
 
 impl User {
@@ -137,6 +149,10 @@ impl User {
             photo_url: row.try_get("photo_url")?,
             background_url: row.try_get("background_url")?,
             created_at: row.try_get("created_at")?,
+            session_version: row.try_get("session_version")?,
+            public_id: row.try_get("public_id")?,
+            federation_enabled: row.try_get("federation_enabled")?,
+            role: row.try_get("role")?,
         })
     }
 
@@ -174,6 +190,11 @@ impl User {
             .next()
             .map(|letter| letter.to_uppercase().collect())
             .unwrap_or_default()
+    }
+
+    /// Site moderators and admins: they can ban or delete any community.
+    pub fn is_staff(&self) -> bool {
+        matches!(self.role.as_str(), "moderator" | "admin")
     }
 
     pub fn image_url(&self, image: ProfileImage) -> Option<&str> {
@@ -302,9 +323,11 @@ pub enum CreateAccountError {
 }
 
 pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User, CreateAccountError> {
+    // Not a community's name either: they share the Fediverse names.
     let result = sqlx::query(concat!(
         "INSERT INTO users (username, email, password_hash, firstname, lastname, birthday)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         SELECT $1, $2, $3, $4, $5, $6
+         WHERE NOT EXISTS (SELECT 1 FROM communities WHERE LOWER(slug) = LOWER($1))
          RETURNING ",
         user_columns!()
     ))
@@ -314,11 +337,12 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User,
     .bind(&account.firstname)
     .bind(&account.lastname)
     .bind(account.birthday)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await;
 
     match result {
-        Ok(row) => User::from_row(&row).map_err(CreateAccountError::Database),
+        Ok(Some(row)) => User::from_row(&row).map_err(CreateAccountError::Database),
+        Ok(None) => Err(CreateAccountError::UsernameTaken),
         Err(err) if is_unique_violation(&err) => {
             let constraint = err.as_database_error().and_then(|db_err| db_err.constraint());
             if constraint == Some(EMAIL_INDEX) {
@@ -360,6 +384,16 @@ pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<User>, sqlx::Er
         .transpose()
 }
 
+pub async fn find_by_public_id(pool: &PgPool, public_id: i64) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query(concat!("SELECT ", user_columns!(), " FROM users WHERE public_id = $1"))
+        .bind(public_id)
+        .fetch_optional(pool)
+        .await?
+        .as_ref()
+        .map(User::from_row)
+        .transpose()
+}
+
 pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query(concat!(
         "SELECT ",
@@ -391,6 +425,40 @@ pub async fn update_names(
     Ok(())
 }
 
+/// `None` for accounts created before passwords existed.
+pub async fn password_hash(pool: &PgPool, id: i32) -> Result<Option<String>, sqlx::Error> {
+    Ok(sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .flatten())
+}
+
+/// Saves the new password and signs out every session of the user
+/// (they keep the old `session_version`). Returns the updated user.
+pub async fn update_password(pool: &PgPool, id: i32, password_hash: &str) -> Result<User, sqlx::Error> {
+    let row = sqlx::query(concat!(
+        "UPDATE users SET password_hash = $1, session_version = session_version + 1
+         WHERE id = $2 RETURNING ",
+        user_columns!()
+    ))
+    .bind(password_hash)
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    User::from_row(&row)
+}
+
+/// Id and stored email of the account using `email`, ignoring case.
+pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<(i32, String)>, sqlx::Error> {
+    let row = sqlx::query("SELECT id, email FROM users WHERE LOWER(email) = LOWER($1)")
+        .bind(email)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|row| Ok((row.try_get("id")?, row.try_get("email")?)))
+        .transpose()
+}
+
 pub async fn update_bio(pool: &PgPool, id: i32, bio: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE users SET bio = $1 WHERE id = $2")
         .bind(bio)
@@ -400,16 +468,20 @@ pub async fn update_bio(pool: &PgPool, id: i32, bio: &str) -> Result<(), sqlx::E
     Ok(())
 }
 
-/// Returns `false` when the username is already used by someone else, ignoring case.
+/// Returns `false` when the username is already used by someone else, or by
+/// a community, ignoring case.
 pub async fn update_username(pool: &PgPool, id: i32, username: &str) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("UPDATE users SET username = $1 WHERE id = $2")
-        .bind(username)
-        .bind(id)
-        .execute(pool)
-        .await;
+    let result = sqlx::query(
+        "UPDATE users SET username = $1 WHERE id = $2
+         AND NOT EXISTS (SELECT 1 FROM communities WHERE LOWER(slug) = LOWER($1))",
+    )
+    .bind(username)
+    .bind(id)
+    .execute(pool)
+    .await;
 
     match result {
-        Ok(_) => Ok(true),
+        Ok(done) => Ok(done.rows_affected() > 0),
         Err(err) if is_unique_violation(&err) => Ok(false),
         Err(err) => Err(err),
     }

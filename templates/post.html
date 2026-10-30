@@ -1,27 +1,22 @@
-{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% import "macros/comment.html" as comments_ui %}
+{% block head %}{% if let Some(url) = activitypub_url %}
+<link rel="alternate" type="application/activity+json" href="{{ url }}" />
+{% endif %}{% endblock %}
+{% block content %}
 <div class="flex center vertical full-width posts">
-    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false) %}{% endcall %}
+    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false, can_moderate) %}{% endcall %}
 
     <section class="box content comments" id="comments">
         <h2>Comments</h2>
-        {% for comment in comments %}
-        <article class="comment" id="comment-{{ comment.id }}">
-            <header class="post-header">
-                <a href="/user/{{ comment.author.username }}" class="post-author">
-                    {% if let Some(url) = comment.author.photo_url %}
-                    <img src="{{ url }}" alt="" class="nav-avatar" />
-                    {% else %}
-                    <span class="nav-avatar placeholder" aria-hidden="true">{{ comment.author.initial() }}</span>
-                    {% endif %}
-                    <span>
-                        <strong>{{ comment.author.display_name() }}</strong>
-                        <span class="post-username">@{{ comment.author.username }}</span>
-                    </span>
-                </a>
-                <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
-            </header>
-            <p class="post-body">{{ comment.body }}</p>
-        </article>
+        {% for thread in threads %}
+        {% call comments_ui::comment_item(thread.comment, post.id, layout.viewer.is_some()) %}{% endcall %}
+        {% if !thread.replies.is_empty() %}
+        <div class="comment-replies">
+            {% for reply in thread.replies %}
+            {% call comments_ui::comment_item(reply, post.id, layout.viewer.is_some()) %}{% endcall %}
+            {% endfor %}
+        </div>
+        {% endif %}
         {% else %}
         <p class="empty">No comments yet.</p>
         {% endfor %}
@@ -31,6 +26,12 @@
             {% if let Some(message) = error %}
             <p class="error">{{ message }}</p>
             {% endif %}
+            {# Filled from ?reply_to= or by assets/system.js, empty for a comment on the post. #}
+            <input type="hidden" name="parent_id" value="{% if let Some(target) = reply_to %}{{ target.id }}{% endif %}" data-reply-field />
+            <p class="reply-banner" data-reply-banner{% if reply_to.is_none() %} hidden{% endif %}>
+                Replying to <strong data-reply-name>{% if let Some(target) = reply_to %}@{{ target.author }}{% endif %}</strong>
+                <a href="/posts/{{ post.id }}#comment-form" class="action" data-reply-cancel>Cancel</a>
+            </p>
             <label for="comment-body" class="visually-hidden">Comment</label>
             <textarea
                 id="comment-body"

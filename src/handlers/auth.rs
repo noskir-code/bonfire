@@ -7,7 +7,7 @@ use argon2::{
 use askama::Template;
 use axum::{
     Form,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
@@ -85,20 +85,20 @@ fn redirect_signed_in(layout: &Layout) -> Option<Response> {
 
 /// A problem shown on the form: the field gets a red border and the message
 /// is shown under it. `field` is `None` for problems not caused by a field.
-struct FormError {
+pub(crate) struct FormError {
     field: Option<&'static str>,
     message: String,
 }
 
 impl FormError {
-    fn field(field: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn field(field: &'static str, message: impl Into<String>) -> Self {
         Self {
             field: Some(field),
             message: message.into(),
         }
     }
 
-    fn general(message: impl Into<String>) -> Self {
+    pub(crate) fn general(message: impl Into<String>) -> Self {
         Self {
             field: None,
             message: message.into(),
@@ -106,19 +106,19 @@ impl FormError {
     }
 }
 
-fn server_error() -> FormError {
+pub(crate) fn server_error() -> FormError {
     FormError::general("Something went wrong, try again later.")
 }
 
 /// Message for `field`, used by the templates to mark it.
-fn error_for<'a>(errors: &'a [FormError], field: &str) -> Option<&'a str> {
+pub(crate) fn error_for<'a>(errors: &'a [FormError], field: &str) -> Option<&'a str> {
     errors
         .iter()
         .find(|error| error.field == Some(field))
         .map(|error| error.message.as_str())
 }
 
-fn general_errors(errors: &[FormError]) -> Vec<&str> {
+pub(crate) fn general_errors(errors: &[FormError]) -> Vec<&str> {
     errors
         .iter()
         .filter(|error| error.field.is_none())
@@ -319,7 +319,7 @@ pub async fn register(
         }
     };
 
-    if let Err(err) = sign_in(&session, created.id).await {
+    if let Err(err) = sign_in(&session, &created).await {
         tracing::error!("failed to sign in new user {}: {}", created.id, err);
         return Redirect::to("/login").into_response();
     }
@@ -349,6 +349,8 @@ struct LoginTemplate {
     errors: Vec<FormError>,
     /// Username or email, kept when the form is shown again.
     login: String,
+    /// Coming from "forgot password": the password was just changed.
+    password_reset: bool,
 }
 
 impl LoginTemplate {
@@ -361,7 +363,11 @@ impl LoginTemplate {
     }
 }
 
-pub async fn login_page(State(state): State<AppState>, session: Session) -> Response {
+pub async fn login_page(
+    State(state): State<AppState>,
+    session: Session,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
     let layout = Layout::load(&state, &session).await;
     if let Some(redirect) = redirect_signed_in(&layout) {
         return redirect;
@@ -371,6 +377,7 @@ pub async fn login_page(State(state): State<AppState>, session: Session) -> Resp
         layout,
         errors: Vec::new(),
         login: String::new(),
+        password_reset: query.contains_key("reset"),
     })
 }
 
@@ -395,6 +402,7 @@ pub async fn login(
             layout,
             errors,
             login: login.clone(),
+            password_reset: false,
         };
         (status, render_template(&template)).into_response()
     };
@@ -431,7 +439,15 @@ pub async fn login(
         return show_errors(layout, StatusCode::UNAUTHORIZED, errors);
     };
 
-    if let Err(err) = sign_in(&session, user_id).await {
+    let signed_in_user = match user::find_by_id(pool, user_id).await {
+        Ok(Some(found)) => found,
+        Ok(None) => return show_errors(layout, StatusCode::INTERNAL_SERVER_ERROR, vec![server_error()]),
+        Err(err) => {
+            tracing::error!("failed to load user {}: {}", user_id, err);
+            return show_errors(layout, StatusCode::INTERNAL_SERVER_ERROR, vec![server_error()]);
+        }
+    };
+    if let Err(err) = sign_in(&session, &signed_in_user).await {
         tracing::error!("failed to sign in user {}: {}", user_id, err);
         return show_errors(layout, StatusCode::INTERNAL_SERVER_ERROR, vec![server_error()]);
     }

@@ -1,0 +1,34 @@
+{# One comment of a post page. `signed_in` shows the reply link, which works
+   without JavaScript (`?reply_to=`); assets/system.js fills the form in place. #}
+{% macro comment_item(comment, post_id, signed_in) %}
+<article class="comment" id="comment-{{ comment.id }}">
+    <header class="post-header">
+        <a href="{{ comment.author.profile_url() }}" class="post-author"{% if comment.author.is_remote() %} rel="nofollow noopener"{% endif %}>
+            {% if let Some(url) = comment.author.photo_url() %}
+            <img src="{{ url }}" alt="" class="nav-avatar" />
+            {% else %}
+            <span class="nav-avatar placeholder" aria-hidden="true">{{ comment.author.initial() }}</span>
+            {% endif %}
+            <span>
+                <strong>{{ comment.author.display_name() }}</strong>
+                <span class="post-username">{{ comment.author.handle() }}</span>
+            </span>
+        </a>
+        <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
+    </header>
+    {% if let Some(parent_author) = comment.parent_author %}
+    {% if let Some(parent_id) = comment.parent_id %}
+    <a href="#comment-{{ parent_id }}" class="reply-context">Replying to @{{ parent_author }}</a>
+    {% endif %}
+    {% endif %}
+    <p class="post-body">{{ comment.body }}</p>
+    {% if signed_in %}
+    <a
+        href="/posts/{{ post_id }}?reply_to={{ comment.id }}#comment-form"
+        class="action reply-link"
+        data-reply-to="{{ comment.id }}"
+        data-reply-author="{{ comment.author.mention() }}"
+    >Reply</a>
+    {% endif %}
+</article>
+{% endmacro %}

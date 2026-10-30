@@ -1,4 +1,8 @@
-{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% block content %}
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %}
+{% block head %}{% if let Some(url) = activitypub_url %}
+<link rel="alternate" type="application/activity+json" href="{{ url }}" />
+{% endif %}{% endblock %}
+{% block content %}
 <section class="box content profile">
     <div class="profile-background">
         {% if let Some(url) = user.background_url %}
@@ -37,9 +41,20 @@
     {% endif %}
     {% when ProfileTab::Comments %}
     <h2>Comments</h2>
+    {% for comment in comments %}
+    <article class="comment" id="comment-{{ comment.id }}">
+        <a href="/posts/{{ comment.post_id }}#comment-{{ comment.id }}" class="comment-context">
+            <span class="post-username">On @{{ comment.post_author }}'s post</span>
+            <span class="comment-excerpt">{{ comment.post_excerpt }}{% if comment.post_truncated %}…{% endif %}</span>
+        </a>
+        <p class="post-body">{{ comment.body }}</p>
+        <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
+    </article>
+    {% else %}
     <p class="empty">
         {% if is_own_profile %}You haven't commented anything yet.{% else %}@{{ user.username }} hasn't commented anything yet.{% endif %}
     </p>
+    {% endfor %}
     {% when ProfileTab::Friends %}
     <h2>Friends</h2>
     <p class="empty">
@@ -65,7 +80,7 @@
 {% if !posts.is_empty() %}
 <div class="flex center vertical full-width posts">
     {% for post in posts %}
-    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false) %}{% endcall %}
+    {% call posts_ui::post_card(post, layout.viewer.is_some(), return_to, false, false) %}{% endcall %}
     {% endfor %}
 </div>
 {% endif %}

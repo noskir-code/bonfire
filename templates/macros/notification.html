@@ -1,0 +1,32 @@
+{# One notification, on the page and sent live by the WebSocket (see
+   handlers/notification.rs). Opening it marks it read, through /open. #}
+{% macro notification_item(notification) %}
+<li class="notification{% if notification.unread %} unread{% endif %}" id="notification-{{ notification.id }}" data-notification-id="{{ notification.id }}">
+    <a href="/notifications/{{ notification.id }}/open" class="notification-link">
+        {% if let Some(actor) = notification.actor %}
+        {% if let Some(url) = actor.photo_url %}
+        <img src="{{ url }}" alt="" class="nav-avatar" />
+        {% else %}
+        <span class="nav-avatar placeholder" aria-hidden="true">{{ actor.initial() }}</span>
+        {% endif %}
+        {% else %}
+        <span class="nav-avatar placeholder" aria-hidden="true">@</span>
+        {% endif %}
+        <span class="notification-text">
+            <span>
+                <strong>{{ notification.actor_name() }}</strong> {{ notification.kind.action() }}
+                <span class="visually-hidden" data-unread-label{% if !notification.unread %} hidden{% endif %}>(new)</span>
+            </span>
+            {% if let Some(comment) = notification.comment_excerpt %}
+            <span class="notification-excerpt">“{{ comment }}”</span>
+            {% else if let Some(post) = notification.post_excerpt %}
+            <span class="notification-excerpt">{{ post }}{% if notification.post_truncated %}…{% endif %}</span>
+            {% endif %}
+            <time class="post-meta" datetime="{{ notification.created_at_iso() }}" data-relative>{{ notification.created_at_label() }}</time>
+        </span>
+    </a>
+    <form action="/notifications/{{ notification.id }}/delete" method="post" class="notification-delete" data-notification-action>
+        <button type="submit" class="action" aria-label="Delete this notification">Delete</button>
+    </form>
+</li>
+{% endmacro %}

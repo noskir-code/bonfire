@@ -12,6 +12,7 @@ use crate::{
     AppState,
     entities::post::{self, BODY_MAX_CHARS, BodyError, Post, Visibility},
     handlers::{
+        notifier,
         system::{Layout, render_template},
         user::signed_in_user,
     },
@@ -210,7 +211,7 @@ pub async fn create_post(
             .get("visibility")
             .and_then(|value| Visibility::parse(value))
             .ok_or(PostError::InvalidVisibility)?;
-        post::create(&pool, me.id, &body, visibility)
+        post::create(&pool, me.id, &body, visibility, None)
             .await
             .map_err(|err| {
                 tracing::error!("failed to create post: {}", err);
@@ -219,6 +220,9 @@ pub async fn create_post(
     }
     .await;
 
+    if let Ok(post_id) = &result {
+        notifier::post_created(&state, &pool, *post_id).await;
+    }
     let location = match result {
         Ok(_) => page.url().to_string(),
         Err(error) => format!("{}?error={}", page.url(), error.code()),

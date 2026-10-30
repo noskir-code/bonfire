@@ -1,6 +1,9 @@
 {% extends "base.html" %} {% import "macros/form.html" as form %} {% block content %}
 <section class="box content auth">
     <h1>Login</h1>
+    {% if password_reset %}
+    <p class="saved">Your password was changed. You can log in with the new one.</p>
+    {% endif %}
     {% call form::general(self.general_errors()) %}{% endcall %}
 
     <form action="/login" method="post">
@@ -32,6 +35,7 @@
         </label>
         <button type="submit" class="button">Login</button>
     </form>
+    <p><a href="/forgot-password">Forgot your password?</a></p>
     <p>No account yet? <a href="/register">Register</a></p>
 </section>
 {% endblock %}

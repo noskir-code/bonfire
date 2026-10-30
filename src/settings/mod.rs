@@ -1,4 +1,4 @@
 mod config;
 pub mod logger;
 
-pub use config::Config;
+pub use config::{Config, SmtpConfig, SmtpSecurity};

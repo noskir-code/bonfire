@@ -33,22 +33,23 @@
 
 {# One post with its author and actions. `signed_in` shows the buttons,
    `return_to` is the page they come back to after a like or a share,
-   `collapse` cuts long posts with a "Show more" button (done by system.js). #}
-{% macro post_card(post, signed_in, return_to, collapse) %}
+   `collapse` cuts long posts with a "Show more" button (done by system.js),
+   `moderate` shows "Remove" to the moderators of the post's community. #}
+{% macro post_card(post, signed_in, return_to, collapse, moderate) %}
 <article class="box content post" id="post-{{ post.id }}">
     {% if let Some(sharer) = post.shared_by %}
     <p class="post-shared-by">Shared by <a href="/user/{{ sharer }}">@{{ sharer }}</a></p>
     {% endif %}
     <header class="post-header">
-        <a href="/user/{{ post.author.username }}" class="post-author">
-            {% if let Some(url) = post.author.photo_url %}
+        <a href="{{ post.author.profile_url() }}" class="post-author"{% if post.author.is_remote() %} rel="nofollow noopener"{% endif %}>
+            {% if let Some(url) = post.author.photo_url() %}
             <img src="{{ url }}" alt="" class="nav-avatar" />
             {% else %}
             <span class="nav-avatar placeholder" aria-hidden="true">{{ post.author.initial() }}</span>
             {% endif %}
             <span>
                 <strong>{{ post.author.display_name() }}</strong>
-                <span class="post-username">@{{ post.author.username }}</span>
+                <span class="post-username">{{ post.author.handle() }}</span>
             </span>
         </a>
         <a href="/posts/{{ post.id }}" class="post-meta">
@@ -56,6 +57,9 @@
             {% if post.is_private() %} · <span class="only-you">Only me</span>{% endif %}
         </a>
     </header>
+    {% if let Some(community) = post.community %}
+    <p class="post-community">in <a href="/community/{{ community.slug }}">{{ community.name }}</a>{% if !community.is_public %} · <span class="only-you">Members only</span>{% endif %}</p>
+    {% endif %}
     <p class="post-body" id="post-{{ post.id }}-body"{% if collapse %} data-collapsible{% endif %}>{{ post.body }}</p>
     <footer class="post-actions">
         {% if signed_in %}
@@ -84,14 +88,28 @@
 
         {# Shown by system.js, which needs JavaScript to copy or share the link. #}
         <button type="button" class="action" data-share-url="/posts/{{ post.id }}" hidden>Copy link</button>
+
+        {% if let Some(url) = post.ap_url %}
+        <a href="{{ url }}" class="action" rel="nofollow noopener">Original</a>
+        {% endif %}
+
+        {% if moderate %}
+        {% if let Some(community) = post.community %}
+        <form action="/community/{{ community.slug }}/posts/{{ post.id }}/remove" method="post" class="post-remove">
+            <input type="hidden" name="return" value="{{ return_to }}" />
+            <button type="submit" class="action danger">Remove</button>
+        </form>
+        {% endif %}
+        {% endif %}
     </footer>
 </article>
 {% endmacro %}
 
-{# Every post, long ones collapsed, or `empty` when there is none. Used by home and feed. #}
-{% macro post_list(posts, empty, signed_in, return_to) %}
+{# Every post, long ones collapsed, or `empty` when there is none. Used by
+   home, feed and communities; `moderate` like for `post_card`. #}
+{% macro post_list(posts, empty, signed_in, return_to, moderate) %}
 {% for post in posts %}
-{% call post_card(post, signed_in, return_to, true) %}{% endcall %}
+{% call post_card(post, signed_in, return_to, true, moderate) %}{% endcall %}
 {% else %}
 <p class="empty">{{ empty }}</p>
 {% endfor %}

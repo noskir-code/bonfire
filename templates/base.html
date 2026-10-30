@@ -11,6 +11,9 @@
         {% block scripts %}
         <script src="/assets/system.js" defer></script>
         {% endblock %}
+        {# Pages with a Fediverse version link it: pasting the page's address in
+           Mastodon's search finds the account or post. #}
+        {% block head %}{% endblock %}
     </head>
     <body>
         <div class="grid horizontal page end fixed full-width">
@@ -31,11 +34,20 @@
                     <a href="/your-feed">Feed</a>
                     <a href="/communities">Communities</a>
                     <a href="/messenger">Messenger</a>
+                    <a href="/notifications" class="flex center" data-notifications>
+                        Notifications
+                        {# Signed in only, updated live by assets/system.js, hidden at 0. #}
+                        {% if layout.viewer.is_some() %}
+                        <span class="badge" data-unread{% if layout.unread_notifications == 0 %} hidden{% endif %}>
+                            {{ layout.unread_label() }}<span class="visually-hidden"> unread</span>
+                        </span>
+                        {% endif %}
+                    </a>
                     <a href="/settings">Settings</a>
                 </nav>
                 <div class="flex bottom center vertical">
                     <!-- Versions -->
-                    <div>Bonfire Protocol &middot; v.0.0.18</div>
+                    <div>Bonfire Protocol &middot; v.0.1.29</div>
                     <div class="flex wrap space-around infos">
                         <a href="/terms-of-use">&bull;Terms of Use</a>
                         <a href="/privacy-policy">&bull;Privacy Policy</a>
@@ -46,7 +58,6 @@
             </div>
             <div class="flex horizontal right">
                 {% if let Some(viewer) = layout.viewer %}
-                <button>notif</button>
                 <a href="/user/{{ viewer.username }}" class="flex horizontal center">
                     <div>{{ viewer.username }}</div>
                     {% if let Some(url) = viewer.photo_url %}

@@ -87,6 +87,15 @@ pub async fn delete(pool: &PgPool, selector: &str) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Signs the user out of every browser, after a password change or reset.
+pub async fn delete_for_user(pool: &PgPool, user_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM remember_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Removes expired tokens, returns how many.
 pub async fn delete_expired(pool: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(sqlx::query("DELETE FROM remember_tokens WHERE expires_at <= NOW()")

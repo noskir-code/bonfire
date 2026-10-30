@@ -7,6 +7,21 @@ edition = "2024"
 argon2 = "0.6.0"
 askama = "0.16.1"
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
+lettre = { version = "0.11.19", default-features = false, features = [
+  "builder",
+  "smtp-transport",
+  "pool",
+  "hostname",
+  "tokio1",
+  "tokio1-rustls-tls",
+] }
+# Requests to other Fediverse servers. TLS comes from rustls with ring (below),
+# the default provider (aws-lc) needs a C toolchain.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+# Fediverse signatures (HTTP Signatures, RSA-SHA256). `sha2` is re-exported as `rsa::sha2`.
+rsa = { version = "0.9.10", features = ["sha2", "getrandom"] }
+# Only to pick ring as the TLS provider of reqwest, see `main`.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1.0.154"
 sqlx = { version = "0.9.0", features = ["chrono", "postgres", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["full"] }
@@ -14,3 +29,14 @@ tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["fs", "trace"] }
 tower-sessions = "0.15.0"
 tracing = "0.1.44"
+
+# RSA is unusably slow without optimizations: making a key takes seconds
+# instead of a fraction of one. Only these crates are optimized in debug builds.
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3

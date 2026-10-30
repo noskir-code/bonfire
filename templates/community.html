@@ -1,0 +1,137 @@
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %}
+{% block head %}{% if let Some(url) = activitypub_url %}
+<link rel="alternate" type="application/activity+json" href="{{ url }}" />
+{% endif %}{% endblock %}
+{% block content %}
+<section class="box content community-header">
+    {% if community.is_banned() %}
+    <p class="error">This community is closed by the site's moderators. Only they can see it.</p>
+    {% endif %}
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    <div class="community-identity">
+        {% if let Some(url) = community.photo_url %}
+        <img src="{{ url }}" alt="" class="community-photo" />
+        {% else %}
+        <span class="community-photo placeholder" aria-hidden="true">{{ community.initial() }}</span>
+        {% endif %}
+        <div>
+            <h1>{{ community.name }}</h1>
+            <p class="post-username">
+                {{ community.member_count }} member{% if community.member_count != 1 %}s{% endif %}
+                {% if follower_count > 0 %} · {{ follower_count }} on the Fediverse{% endif %}
+                {% if !community.is_public() %} · Private{% endif %}
+            </p>
+            {% if let Some(handle) = fediverse_handle %}
+            <p class="post-username">On Misskey, Mastodon...: follow <strong>{{ handle }}</strong>, mention it to post.</p>
+            {% endif %}
+        </div>
+    </div>
+    <div class="community-actions">
+        {% if layout.viewer.is_some() %}
+        {% if membership.is_member %}
+        {% if !membership.is_owner %}
+        <form action="/community/{{ community.slug }}/quit" method="post">
+            <button type="submit" class="button">Leave</button>
+        </form>
+        {% endif %}
+        {% else %}
+        <form action="/community/{{ community.slug }}/join" method="post">
+            <button type="submit" class="button">Join</button>
+        </form>
+        {% endif %}
+        {% if !membership.can_manage() %}
+        <form action="/community/{{ community.slug }}/ignore" method="post">
+            <button type="submit" class="button" aria-pressed="{{ membership.is_ignored }}">
+                {% if membership.is_ignored %}Show on home{% else %}Hide from home{% endif %}
+            </button>
+        </form>
+        {% endif %}
+        {% if can_manage %}
+        <a href="/community/{{ community.slug }}/settings" class="button">Settings</a>
+        {% endif %}
+        {% if is_staff %}
+        <form action="/community/{{ community.slug }}/ban" method="post">
+            <button type="submit" class="button danger">{% if community.is_banned() %}Reopen{% else %}Close (ban){% endif %}</button>
+        </form>
+        {% endif %}
+        {% else %}
+        <a href="/login" class="button">Login to join</a>
+        {% endif %}
+    </div>
+</section>
+
+<div class="community-layout">
+    <div class="community-main">
+        {% if membership.is_member && !community.is_banned() %}
+        <section class="box content composer" id="composer">
+            <h2>Post in {{ community.name }}</h2>
+            <form action="/community/{{ community.slug }}/posts" method="post">
+                <label for="post-body" class="visually-hidden">Post</label>
+                <textarea
+                    id="post-body"
+                    name="body"
+                    placeholder="What do you want to share with the community?"
+                    maxlength="{{ body_max_chars }}"
+                    rows="4"
+                    required
+                ></textarea>
+                <button type="submit" class="button">Publish</button>
+            </form>
+        </section>
+        {% endif %}
+
+        <nav class="profile-tabs community-sorts" aria-label="Sort posts">
+            {% for link in sorts %}
+            <a href="{{ link.url }}"{% if link.active %} class="active" aria-current="page"{% endif %}>{{ link.label }}</a>
+            {% endfor %}
+        </nav>
+
+        <div class="flex center vertical full-width posts">
+            {% if posts_hidden %}
+            <p class="box content empty">This community is private: join it to read its posts.</p>
+            {% else %}
+            {% call posts_ui::post_list(posts, "No post yet.", layout.viewer.is_some(), return_to, can_manage) %}{% endcall %}
+            {% endif %}
+        </div>
+    </div>
+
+    <aside class="community-side">
+        <section class="box content">
+            <h2>About</h2>
+            {% if community.description.is_empty() %}
+            <p class="empty">No description.</p>
+            {% else %}
+            <p class="profile-bio">{{ community.description }}</p>
+            {% endif %}
+        </section>
+
+        <section class="box content">
+            <h2>Rules</h2>
+            {% for rule in rules %}
+            <details class="community-rule">
+                <summary>{{ loop.index }}. {{ rule.title }}</summary>
+                {% if !rule.body.is_empty() %}<p class="profile-bio">{{ rule.body }}</p>{% endif %}
+            </details>
+            {% else %}
+            <p class="empty">No rules yet.</p>
+            {% endfor %}
+        </section>
+
+        <section class="box content">
+            <h2>Moderators</h2>
+            <ul class="community-moderators">
+                {% for moderator in moderators %}
+                <li>
+                    <a href="/user/{{ moderator.user.username }}">{{ moderator.user.display_name() }}</a>
+                    <span class="post-username">@{{ moderator.user.username }}{% if moderator.is_owner %} · owner{% endif %}</span>
+                </li>
+                {% else %}
+                <li class="empty">No moderators.</li>
+                {% endfor %}
+            </ul>
+        </section>
+    </aside>
+</div>
+{% endblock %}

@@ -1,6 +1,10 @@
 pub mod auth;
 pub mod comment;
+pub mod community;
 pub mod image;
+pub mod notification;
+pub mod notifier;
+pub mod password;
 pub mod post;
 pub mod reaction;
 pub mod session;

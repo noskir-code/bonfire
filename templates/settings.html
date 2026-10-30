@@ -62,6 +62,38 @@
         <button type="submit" class="button">Save names</button>
     </form>
 
+    <form action="/settings/password" method="post">
+        <label for="current_password">Current password</label>
+        <input
+            id="current_password"
+            type="password"
+            name="current_password"
+            autocomplete="current-password"
+            required
+        />
+        <label for="new_password">New password</label>
+        <input
+            id="new_password"
+            type="password"
+            name="new_password"
+            minlength="{{ password_min_chars }}"
+            maxlength="{{ password_max_chars }}"
+            autocomplete="new-password"
+            required
+        />
+        <label for="new_password_confirm">Confirm new password</label>
+        <input
+            id="new_password_confirm"
+            type="password"
+            name="new_password_confirm"
+            minlength="{{ password_min_chars }}"
+            maxlength="{{ password_max_chars }}"
+            autocomplete="new-password"
+            required
+        />
+        <button type="submit" class="button">Change password</button>
+    </form>
+
     <form action="/settings/photo" method="post" enctype="multipart/form-data">
         <label for="photo">Photo</label>
         <input

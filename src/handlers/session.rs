@@ -12,24 +12,53 @@ use tower_sessions::{Session, session::Id};
 
 use crate::{
     AppState,
-    entities::session as tokens,
+    entities::{
+        session as tokens,
+        user::{self, User},
+    },
     handlers::auth::{hash_password_blocking, verify_password_blocking},
 };
 
 pub const USER_ID_KEY: &str = "user_id";
+/// `User::session_version` when the session was signed in.
+const SESSION_VERSION_KEY: &str = "session_version";
 /// Same name as the old Instavox cookie.
 const REMEMBER_COOKIE: &str = "remember_token";
 
-/// Id of the signed-in user, if any.
-pub async fn current_user_id(session: &Session) -> Option<i32> {
+/// Id stored in the session. Use `signed_in` to know who is really signed in.
+async fn current_user_id(session: &Session) -> Option<i32> {
     session.get::<i32>(USER_ID_KEY).await.ok().flatten()
+}
+
+/// The signed-in user, if any. Sessions signed in before the last password
+/// change or reset (older `session_version`) are signed out here.
+pub async fn signed_in(pool: &PgPool, session: &Session) -> Result<Option<User>, sqlx::Error> {
+    let Some(user_id) = current_user_id(session).await else {
+        return Ok(None);
+    };
+    let version = session
+        .get::<i32>(SESSION_VERSION_KEY)
+        .await
+        .ok()
+        .flatten();
+
+    match user::find_by_id(pool, user_id).await? {
+        Some(user) if version == Some(user.session_version) => Ok(Some(user)),
+        _ => {
+            if let Err(err) = sign_out(session).await {
+                tracing::warn!("failed to sign out outdated session: {}", err);
+            }
+            Ok(None)
+        }
+    }
 }
 
 /// Gives the session a new id before storing the user, so an id set
 /// before signing in (session fixation) can't be reused afterwards.
-pub async fn sign_in(session: &Session, user_id: i32) -> Result<(), tower_sessions::session::Error> {
+pub async fn sign_in(session: &Session, user: &User) -> Result<(), tower_sessions::session::Error> {
     session.cycle_id().await?;
-    session.insert(USER_ID_KEY, user_id).await
+    session.insert(USER_ID_KEY, user.id).await?;
+    session.insert(SESSION_VERSION_KEY, user.session_version).await
 }
 
 /// Deletes the session data and its cookie.
@@ -45,6 +74,19 @@ Stay signed in
 /// seeded by the operating system, reused here instead of adding a crate.
 fn random_part() -> String {
     Id::default().to_string()
+}
+
+/// A new secret token, as `(selector, validator)`: the selector (128 bits) finds
+/// the row, the validator (256 bits) is the secret, stored hashed.
+/// Sent as `selector.validator`, see `split_token`.
+pub fn new_token() -> (String, String) {
+    (random_part(), format!("{}{}", random_part(), random_part()))
+}
+
+/// `selector.validator` into its two parts.
+pub fn split_token(token: &str) -> Option<(String, String)> {
+    let (selector, validator) = token.split_once('.')?;
+    (!selector.is_empty() && !validator.is_empty()).then(|| (selector.to_string(), validator.to_string()))
 }
 
 fn cookie(value: &str, max_age_secs: i64, secure: bool) -> Option<HeaderValue> {
@@ -69,16 +111,19 @@ fn read_token(headers: &HeaderMap) -> Option<(String, String)> {
         .flat_map(|value| value.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
         .find(|(name, _)| *name == REMEMBER_COOKIE)
-        .and_then(|(_, value)| value.split_once('.'))
-        .map(|(selector, validator)| (selector.to_string(), validator.to_string()))
+        .and_then(|(_, value)| split_token(value))
+}
+
+/// Whether this browser chose "stay signed in".
+pub fn has_remember_cookie(headers: &HeaderMap) -> bool {
+    read_token(headers).is_some()
 }
 
 /// Creates a token for the user and returns the cookie to send,
 /// `None` (logged) if it failed: the user stays signed in until the next restart.
 pub async fn remember(state: &AppState, user_id: i32) -> Option<HeaderValue> {
     let pool = state.pool.as_ref()?;
-    let selector = random_part();
-    let validator = format!("{}{}", random_part(), random_part());
+    let (selector, validator) = new_token();
 
     let validator_hash = hash_password_blocking(validator.clone()).await?;
     if let Err(err) = tokens::create(pool, &selector, &validator_hash, user_id, state.remember_days).await {
@@ -119,7 +164,10 @@ async fn restore(
         return Ok(false);
     }
 
-    sign_in(session, stored.user_id).await?;
+    let Some(user) = user::find_by_id(pool, stored.user_id).await? else {
+        return Ok(false);
+    };
+    sign_in(session, &user).await?;
     tokens::extend(pool, selector, days).await?;
     Ok(true)
 }

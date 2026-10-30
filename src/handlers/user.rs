@@ -4,7 +4,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
 use sqlx::PgPool;
@@ -12,11 +12,17 @@ use tower_sessions::Session;
 
 use crate::{
     AppState,
+    entities::comment::{self, ProfileComment},
     entities::post::{self, Post},
-    entities::user::{self, BIO_MAX_CHARS, NAME_MAX_CHARS, ProfileImage, USERNAME_MAX_LEN, USERNAME_MIN_LEN, User},
+    entities::session as remember_tokens,
+    entities::user::{
+        self, BIO_MAX_CHARS, NAME_MAX_CHARS, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, ProfileImage,
+        USERNAME_MAX_LEN, USERNAME_MIN_LEN, User,
+    },
     handlers::{
-        image::{self, IMAGE_FIELD, ImageError, MAX_IMAGE_BYTES},
-        session::current_user_id,
+        auth::{hash_password_blocking, verify_password_blocking},
+        image::{self, IMAGE_FIELD, ImageError, ImageOwner, MAX_IMAGE_BYTES},
+        session::{has_remember_cookie, remember, sign_in, signed_in},
         system::{Layout, error_page, render_template},
     },
 };
@@ -31,11 +37,14 @@ enum EditError {
     MissingImage,
     ImageTooLarge,
     UnsupportedImage,
+    WrongPassword,
+    WeakPassword,
+    PasswordMismatch,
     Server,
 }
 
 impl EditError {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 11] = [
         Self::InvalidName,
         Self::InvalidBio,
         Self::InvalidUsername,
@@ -43,6 +52,9 @@ impl EditError {
         Self::MissingImage,
         Self::ImageTooLarge,
         Self::UnsupportedImage,
+        Self::WrongPassword,
+        Self::WeakPassword,
+        Self::PasswordMismatch,
         Self::Server,
     ];
 
@@ -55,6 +67,9 @@ impl EditError {
             Self::MissingImage => "missing-image",
             Self::ImageTooLarge => "image-too-large",
             Self::UnsupportedImage => "unsupported-image",
+            Self::WrongPassword => "wrong-password",
+            Self::WeakPassword => "weak-password",
+            Self::PasswordMismatch => "password-mismatch",
             Self::Server => "server",
         }
     }
@@ -83,6 +98,11 @@ impl EditError {
             Self::UnsupportedImage => {
                 "Supported formats are JPEG, PNG, GIF, WebP and AVIF.".to_string()
             }
+            Self::WrongPassword => "Your current password is wrong.".to_string(),
+            Self::WeakPassword => format!(
+                "The new password must be {PASSWORD_MIN_CHARS} to {PASSWORD_MAX_CHARS} characters, with an uppercase letter, a lowercase letter, a digit and a symbol. Spaces are allowed only one at a time, between words."
+            ),
+            Self::PasswordMismatch => "The two new passwords are different.".to_string(),
             Self::Server => "Something went wrong, try again later.".to_string(),
         }
     }
@@ -208,6 +228,10 @@ struct UserTemplate {
     about: Vec<AboutRow>,
     /// Only loaded for the posts tab.
     posts: Vec<Post>,
+    /// Only loaded for the comments tab.
+    comments: Vec<ProfileComment>,
+    /// The actor for Fediverse servers, see `templates/base.html`.
+    activitypub_url: Option<String>,
     /// Where the like and share buttons come back to.
     return_to: String,
 }
@@ -223,6 +247,8 @@ struct SettingsTemplate {
     image_field: &'static str,
     name_max_chars: usize,
     bio_max_chars: usize,
+    password_min_chars: usize,
+    password_max_chars: usize,
     username_max_len: usize,
 }
 
@@ -264,13 +290,31 @@ pub async fn user_page(
     } else {
         Vec::new()
     };
+    let comments = if tab == ProfileTab::Comments {
+        let viewer_id = layout.viewer.as_ref().map(|viewer| viewer.id);
+        comment::by_author(pool, user.id, viewer_id)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::error!("failed to load comments of {}: {}", user.username, err);
+                Vec::new()
+            })
+    } else {
+        Vec::new()
+    };
+    let activitypub_url = state
+        .federation
+        .as_ref()
+        .filter(|_| user.federation_enabled)
+        .map(|federation| federation.actor_url(user.public_id));
     let template = UserTemplate {
         title: format!("{} (@{})", user.display_name(), user.username),
+        activitypub_url,
         layout,
         tab,
         tabs: tab_links(&user.username, tab),
         about: about_rows(&user, is_own_profile),
         posts,
+        comments,
         return_to: format!("/user/{}", user.username),
         user,
         is_own_profile,
@@ -301,6 +345,8 @@ pub async fn settings_page(
         image_field: IMAGE_FIELD,
         name_max_chars: NAME_MAX_CHARS,
         bio_max_chars: BIO_MAX_CHARS,
+        password_min_chars: PASSWORD_MIN_CHARS,
+        password_max_chars: PASSWORD_MAX_CHARS,
         username_max_len: USERNAME_MAX_LEN,
     };
     render_template(&template)
@@ -319,14 +365,11 @@ pub(crate) async fn signed_in_user(state: &AppState, session: &Session) -> Resul
     let not_signed_in =
         || error_page(Layout::default(), StatusCode::UNAUTHORIZED, "You need to be signed in.");
 
-    let Some(user_id) = current_user_id(session).await else {
-        return Err(not_signed_in());
-    };
-    match user::find_by_id(&pool, user_id).await {
+    match signed_in(&pool, session).await {
         Ok(Some(user)) => Ok((pool, user)),
         Ok(None) => Err(not_signed_in()),
         Err(err) => {
-            tracing::error!("failed to load signed-in user {}: {}", user_id, err);
+            tracing::error!("failed to load signed-in user: {}", err);
             Err(error_page(
                 Layout::default(),
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -342,6 +385,64 @@ fn back_to_settings(result: Result<(), EditError>) -> Response {
         Err(error) => format!("/settings?error={}", error.code()),
     };
     Redirect::to(&location).into_response()
+}
+
+/// Changes the password after checking the current one. Every other browser is
+/// signed out (sessions and "stay signed in"), this one stays signed in.
+pub async fn change_password(
+    State(state): State<AppState>,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let field = |key: &str| form.get(key).cloned().unwrap_or_default();
+    let (current, new, confirm) = (
+        field("current_password"),
+        field("new_password"),
+        field("new_password_confirm"),
+    );
+
+    let stored_hash = match user::password_hash(&pool, me.id).await {
+        Ok(hash) => hash,
+        Err(err) => return back_to_settings(Err(server_error(err))),
+    };
+    // Accounts without a password can't confirm one: they use "forgot password".
+    if !verify_password_blocking(current, stored_hash).await {
+        return back_to_settings(Err(EditError::WrongPassword));
+    }
+    if !user::validate_password(&new) {
+        return back_to_settings(Err(EditError::WeakPassword));
+    }
+    if new != confirm {
+        return back_to_settings(Err(EditError::PasswordMismatch));
+    }
+
+    let Some(new_hash) = hash_password_blocking(new).await else {
+        return back_to_settings(Err(EditError::Server));
+    };
+    let updated = match user::update_password(&pool, me.id, &new_hash).await {
+        Ok(updated) => updated,
+        Err(err) => return back_to_settings(Err(server_error(err))),
+    };
+    if let Err(err) = remember_tokens::delete_for_user(&pool, me.id).await {
+        tracing::error!("failed to sign out other browsers of user {}: {}", me.id, err);
+    }
+    // The password change made every session outdated, this one included.
+    if let Err(err) = sign_in(&session, &updated).await {
+        tracing::error!("failed to keep user {} signed in: {}", me.id, err);
+    }
+
+    let mut response = back_to_settings(Ok(()));
+    if has_remember_cookie(&headers)
+        && let Some(cookie) = remember(&state, me.id).await
+    {
+        response.headers_mut().append(SET_COOKIE, cookie);
+    }
+    response
 }
 
 pub async fn update_bio(
@@ -419,17 +520,17 @@ async fn upload_image(
         Err(response) => return response,
     };
 
-    let url = match image::save_user_image(me.id, image, &mut multipart).await {
+    let url = match image::save_image(ImageOwner::User(me.id), image.as_str(), &mut multipart).await {
         Ok(url) => url,
         Err(err) => return back_to_settings(Err(err.into())),
     };
 
     if let Err(err) = user::update_image(&pool, me.id, image, Some(&url)).await {
-        image::remove_user_image(me.id, &url).await;
+        image::remove_image(ImageOwner::User(me.id), &url).await;
         return back_to_settings(Err(server_error(err)));
     }
     if let Some(old_url) = me.image_url(image) {
-        image::remove_user_image(me.id, old_url).await;
+        image::remove_image(ImageOwner::User(me.id), old_url).await;
     }
     back_to_settings(Ok(()))
 }
@@ -444,7 +545,7 @@ async fn remove_image(state: AppState, session: Session, image: ProfileImage) ->
         return back_to_settings(Err(server_error(err)));
     }
     if let Some(old_url) = me.image_url(image) {
-        image::remove_user_image(me.id, old_url).await;
+        image::remove_image(ImageOwner::User(me.id), old_url).await;
     }
     back_to_settings(Ok(()))
 }

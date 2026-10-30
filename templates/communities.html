@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{# A card of the directory. #}
+{% macro community_card(community) %}
+<li>
+    <a href="/community/{{ community.slug }}" class="community-card">
+        {% if let Some(url) = community.photo_url %}
+        <img src="{{ url }}" alt="" class="community-photo small" />
+        {% else %}
+        <span class="community-photo small placeholder" aria-hidden="true">{{ community.initial() }}</span>
+        {% endif %}
+        <span class="community-card-text">
+            <strong>{{ community.name }}</strong>
+            <span class="post-username">/community/{{ community.slug }} · {{ community.member_count }} member{% if community.member_count != 1 %}s{% endif %}{% if !community.is_public() %} · Private{% endif %}</span>
+            {% if !community.description.is_empty() %}
+            <span class="community-card-description">{{ community.description }}</span>
+            {% endif %}
+        </span>
+    </a>
+</li>
+{% endmacro %}
+{% block content %}
+<section class="box content communities">
+    <h1>Communities</h1>
+    <form action="/communities" method="get" class="community-search" role="search">
+        <label for="community-search" class="visually-hidden">Search communities</label>
+        <input id="community-search" type="search" name="q" value="{{ search }}" placeholder="Search by name..." />
+        <button type="submit" class="button">Search</button>
+    </form>
+
+    {% if search.is_empty() && !joined.is_empty() %}
+    <h2>Your communities</h2>
+    <ul class="community-list">
+        {% for community in joined %}
+        {% call community_card(community) %}{% endcall %}
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <h2>{% if search.is_empty() %}All communities{% else %}Results for “{{ search }}”{% endif %}</h2>
+    <ul class="community-list">
+        {% for community in communities %}
+        {% call community_card(community) %}{% endcall %}
+        {% else %}
+        <li class="empty">{% if search.is_empty() %}No community yet: create the first one below.{% else %}No community matches.{% endif %}</li>
+        {% endfor %}
+    </ul>
+</section>
+
+<section class="box content profile-edit" id="create">
+    <h2>Create a community</h2>
+    {% if layout.viewer.is_some() %}
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    <form action="/communities" method="post">
+        <label for="community-name">Name</label>
+        <input id="community-name" type="text" name="name" maxlength="{{ name_max_chars }}" required />
+
+        <label for="community-slug">Address</label>
+        <input
+            id="community-slug"
+            type="text"
+            name="slug"
+            minlength="{{ slug_min_len }}"
+            maxlength="{{ slug_max_len }}"
+            pattern="[a-z0-9_]+"
+            aria-describedby="community-slug-help"
+            required
+        />
+        <p class="field-help" id="community-slug-help">
+            Lowercase letters, digits and _, can't be changed later: /community/<em>address</em>{% if let Some(domain) = domain %}, and @<em>address</em>@{{ domain }} on Misskey, Mastodon and the rest of the Fediverse{% endif %}.
+        </p>
+
+        <label for="community-description">Description</label>
+        <textarea id="community-description" name="description" rows="3" maxlength="{{ description_max_chars }}"></textarea>
+
+        <fieldset class="choices">
+            <legend>Who can read the posts</legend>
+            {% for visibility in visibilities %}
+            <label><input type="radio" name="visibility" value="{{ visibility.as_str() }}"{% if loop.first %} checked{% endif %} /> {{ visibility.label() }}</label>
+            {% endfor %}
+        </fieldset>
+
+        <button type="submit" class="button">Create community</button>
+    </form>
+    {% else %}
+    <p><a href="/login">Login</a> to create a community.</p>
+    {% endif %}
+</section>
+{% endblock %}
