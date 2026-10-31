@@ -3,7 +3,7 @@
 //! handling of the activities other servers send.
 //!
 //! Built with `json!` rather than typed structs: the format has many optional
-//! fields and Bonfire only reads a few of them.
+//! fields and Tison only reads a few of them.
 
 use serde_json::{Value, json};
 use sqlx::{
@@ -45,7 +45,7 @@ pub fn with_context(mut object: Value) -> Value {
     object
 }
 
-/// Bonfire text is plain: escaped, addresses as links (see `linkify`), blank
+/// Tison text is plain: escaped, addresses as links (see `linkify`), blank
 /// lines become paragraphs and line breaks `<br>`, which every Fediverse
 /// server displays.
 pub fn text_to_html(text: &str) -> String {
@@ -57,7 +57,7 @@ pub fn text_to_html(text: &str) -> String {
 }
 
 /// The reverse, for notes of other servers: line breaks and paragraphs kept,
-/// other tags removed (links keep their text), entities decoded. Bonfire
+/// other tags removed (links keep their text), entities decoded. Tison
 /// shows the result as plain text, escaped, so nothing here can inject HTML.
 pub fn html_to_text(html: &str) -> String {
     let mut text = String::with_capacity(html.len());
@@ -204,7 +204,7 @@ fn is_message(object: &Value, sender: &RemoteActor) -> bool {
     object["type"] == "ChatMessage" || (is_note(object) && !is_public(object) && !is_for_followers(object, sender))
 }
 
-/// Types of objects Bonfire shows as posts: Mastodon's polls are Questions,
+/// Types of objects Tison shows as posts: Mastodon's polls are Questions,
 /// Lemmy's posts Pages.
 fn is_note(object: &Value) -> bool {
     matches!(object["type"].as_str(), Some("Note" | "Page" | "Article" | "Question"))
@@ -645,7 +645,7 @@ pub fn object_id(value: &Value) -> Option<&str> {
     value.as_str().or_else(|| value.get("id")?.as_str())
 }
 
-/// Who an incoming activity is for, when it's one Bonfire acts on.
+/// Who an incoming activity is for, when it's one Tison acts on.
 pub enum Recipient {
     User(User),
     Community(Community),
@@ -774,7 +774,7 @@ async fn follow_sender(federation: &Federation, pool: &PgPool, follow: &Value) -
         .map(Recipient::User)
 }
 
-/// The recipient of an incoming activity, `None` when Bonfire ignores it:
+/// The recipient of an incoming activity, `None` when Tison ignores it:
 /// - a Follow of a local user or community, or its Undo,
 /// - the Accept or Reject of a Follow sent by a local user,
 /// - a like, reaction or share of a post or comment stored here, or its Undo,
@@ -991,7 +991,7 @@ async fn send(federation: &Federation, pool: &PgPool, signer: Signer, inboxes: &
     Ok(())
 }
 
-/// Acts on a verified activity from `sender`. Activities Bonfire doesn't
+/// Acts on a verified activity from `sender`. Activities Tison doesn't
 /// handle are accepted and ignored.
 pub async fn receive(
     federation: &Federation,
@@ -1423,7 +1423,7 @@ async fn receive_note(
     } else if is_for_followers(note, sender) {
         Visibility::Followers
     } else {
-        // A direct message: Bonfire has no messages from other servers yet.
+        // A direct message: Tison has no messages from other servers yet.
         tracing::debug!("ignored direct note {} from {}", ap_id, sender.actor_id);
         return Ok(());
     };

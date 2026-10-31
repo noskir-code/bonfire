@@ -2,7 +2,7 @@
 //! other servers using it:
 //! - `federation`: the pages other servers read (WebFinger, actors, posts) and
 //!   the inbox where they send activities,
-//! - `activities`: the JSON of actors, notes and activities, and what Bonfire
+//! - `activities`: the JSON of actors, notes and activities, and what Tison
 //!   does with the activities it receives,
 //! - `linker`: requests to other servers, signed with HTTP Signatures, and the
 //!   delivery queue.
@@ -37,7 +37,7 @@ pub struct Federation {
     /// Domain in `@username@domain`, with the port when it isn't the default one.
     pub domain: String,
     /// Allows `http://` and private addresses for other servers: only to test
-    /// two Bonfire servers on one machine, see `FEDERATION_ALLOW_INSECURE`.
+    /// two Tison servers on one machine, see `FEDERATION_ALLOW_INSECURE`.
     pub allow_insecure: bool,
     client: reqwest::Client,
     /// Wakes the delivery worker when something is queued.

@@ -2,9 +2,9 @@ use std::{collections::HashMap, env, fs, path::PathBuf};
 
 const DEFAULT_RUNTIME_FILE: &str = "configs/runtime.conf";
 
-/// Path of the runtime file, overridable with `BONFIRE_CONFIG`.
+/// Path of the runtime file, overridable with `TISON_CONFIG`.
 fn runtime_config_path() -> PathBuf {
-    env::var("BONFIRE_CONFIG")
+    env::var("TISON_CONFIG")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -121,7 +121,7 @@ pub struct SmtpConfig {
     pub security: SmtpSecurity,
     pub username: Option<String>,
     pub password: Option<String>,
-    /// Sender, like `Bonfire <noreply@example.com>`.
+    /// Sender, like `Tison <noreply@example.com>`.
     pub from: String,
     /// Development mail catcher, see `SmtpConfig::mailpit`.
     pub is_mailpit: bool,
@@ -152,7 +152,7 @@ impl SmtpConfig {
             security: SmtpSecurity::None,
             username: None,
             password: None,
-            from: "Bonfire <noreply@bonfire.localhost>".to_string(),
+            from: "Tison <noreply@tison.localhost>".to_string(),
             is_mailpit: true,
         }
     }
@@ -231,7 +231,7 @@ pub struct Config {
     pub federation: bool,
     /// Lets federation reach `http://` and private addresses. Only to test
     /// two servers on one machine: on a real server it lets anyone make
-    /// Bonfire send requests inside its network.
+    /// Tison send requests inside its network.
     pub federation_allow_insecure: bool,
 }
 

@@ -177,7 +177,7 @@ async fn nodeinfo(State(state): State<AppState>) -> Response {
         "application/json; profile=\"http://nodeinfo.diaspora.software/ns/schema/2.1#\"",
         &json!({
             "version": "2.1",
-            "software": { "name": "bonfire", "version": env!("CARGO_PKG_VERSION") },
+            "software": { "name": "tison", "version": env!("CARGO_PKG_VERSION") },
             "protocols": ["activitypub"],
             "services": { "inbound": [], "outbound": [] },
             "openRegistrations": true,
@@ -302,7 +302,7 @@ async fn community_moderators(State(state): State<AppState>, uri: Uri, Path(publ
     })))
 }
 
-/// Only the number of public posts: Bonfire doesn't list them for other servers yet.
+/// Only the number of public posts: Tison doesn't list them for other servers yet.
 async fn outbox(State(state): State<AppState>, uri: Uri, Path(public_id): Path<i64>) -> Response {
     let Some((federation, pool)) = enabled(&state) else {
         return not_found();
@@ -432,7 +432,7 @@ async fn inbox(State(state): State<AppState>, method: Method, uri: Uri, headers:
     };
     let kind = activity["type"].as_str().unwrap_or_default();
 
-    // Only activities Bonfire acts on are checked, the others are accepted and
+    // Only activities Tison acts on are checked, the others are accepted and
     // dropped: checking means fetching the sender's key, for nothing.
     let recipient = activities::recipient(federation, pool, &activity).await;
     let local_key = match &recipient {

@@ -1,4 +1,4 @@
-//! What Bonfire stores about the Fediverse: accounts of other servers that
+//! What Tison stores about the Fediverse: accounts of other servers that
 //! follow local users and communities, the ones local users follow, likes
 //! and shares from other servers, and activities waiting to be delivered.
 //! The protocol itself is in `src/API/`.
@@ -133,7 +133,7 @@ pub const REACTIONS_TABLE: Table = Table {
 };
 
 /// Activities to send, kept until the other server accepts them so a server
-/// that is down, or a restart of Bonfire, doesn't lose them.
+/// that is down, or a restart of Tison, doesn't lose them.
 pub const DELIVERIES_TABLE: Table = Table {
     name: "federation_deliveries",
     columns: &[
@@ -772,7 +772,7 @@ pub struct Delivery {
 /// the delivery is tried again after that.
 const CLAIM_MINUTES: i32 = 10;
 
-/// Takes up to `limit` deliveries that are due. Several Bonfire servers on the
+/// Takes up to `limit` deliveries that are due. Several Tison servers on the
 /// same database never take the same one.
 pub async fn claim_deliveries(pool: &PgPool, limit: i64) -> Result<Vec<Delivery>, sqlx::Error> {
     sqlx::query(

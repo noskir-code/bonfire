@@ -163,7 +163,7 @@ async fn send_reset_link(state: AppState, email: String) {
         return;
     };
     let email = Email::render(
-        "Reset your Bonfire password",
+        "Reset your Tison password",
         &ResetEmailText {
             link: &link,
             valid_minutes: VALID_MINUTES,

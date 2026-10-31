@@ -19,11 +19,15 @@
         "getrandom",
         "Hubzilla",
         "IMAGESHARING",
+        "labelledby",
         "lastname",
         "Lemmy",
         "lettre",
+        "linkify",
         "Mailpit",
+        "Misskey",
         "Mobilizon",
+        "nodeinfo",
         "notif",
         "Pixelfed",
         "reqwest",
@@ -32,6 +36,8 @@
         "sqlx",
         "starttls",
         "TIMESTAMPTZ",
-        "videotelephony"
+        "Tison",
+        "videotelephony",
+        "webfinger"
     ]
 }

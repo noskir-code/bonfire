@@ -1,7 +1,7 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
     <head>
-        <meta charset="UTF-8" />
+        <meta charset="UTF-8"/>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{% block title %}{{ title }} - Tison{% endblock %}</title>
         <link rel="shortcut icon" href="/public/favicon.ico" type="image/x-icon">
@@ -18,7 +18,7 @@
             } catch {}
         </script>
         {% block stylesheets %}
-        <link rel="stylesheet" href="/assets/style.css" />
+        <link rel="stylesheet" href="/assets/style.css"/>
         {% endblock %}
         {% block scripts %}
         <script src="/assets/system.js" defer></script>
@@ -44,7 +44,7 @@
                     {% if let Some(viewer) = layout.viewer %}
                     <a href="/user/{{ viewer.username }}" class="flex center">
                         {% if let Some(url) = viewer.photo_url %}
-                        <img src="{{ url }}" alt="" class="nav-avatar" />
+                        <img src="{{ url }}" alt="" class="nav-avatar"/>
                         {% else %}
                         <span class="nav-avatar placeholder" aria-hidden="true">{{ viewer.initial() }}</span>
                         {% endif %}

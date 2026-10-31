@@ -6,7 +6,7 @@
 //! `assets/system.js` sends them in the background instead.
 //!
 //! Changes arrive from Postgres (LISTEN on `notification::CHANNEL`, see
-//! `listen`), so a notification made by another Bonfire server sharing the
+//! `listen`), so a notification made by another Tison server sharing the
 //! database reaches pages served here too.
 
 use std::{

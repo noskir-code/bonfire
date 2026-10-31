@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Row};
 
-/// Any number, it only has to be the same for every Bonfire server
+/// Any number, it only has to be the same for every Tison server
 /// sharing the database so they don't change the schema at the same time.
 const SCHEMA_LOCK_ID: i64 = 0x0B0F_1CE5;
 

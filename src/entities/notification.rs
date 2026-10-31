@@ -5,7 +5,7 @@
 //!
 //! Every change also sends a Postgres notification on `CHANNEL` saying what
 //! changed (see `Change`), so the user's open pages update at once (see
-//! `handlers::notification`), even when served by another Bonfire server.
+//! `handlers::notification`), even when served by another Tison server.
 
 use sqlx::{
     PgPool, Row,

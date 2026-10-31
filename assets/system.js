@@ -1,4 +1,4 @@
-// Bonfire client-side helpers, shared by every page (loaded in base.html).
+// Tison client-side helpers, shared by every page (loaded in base.html).
 //
 // Times: any `<time datetime="..." data-relative>` gets a relative text
 // ("5 minutes ago", "3 days ago"...) refreshed while the page is open, and
@@ -41,7 +41,7 @@
 // mouse or the arrow keys and Enter. Without JavaScript, Enter opens the
 // results page.
 
-const Bonfire = (() => {
+const Tison = (() => {
     // Same language as the interface, not the browser, so pages don't mix languages.
     const language = document.documentElement.lang || "en";
 

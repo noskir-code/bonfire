@@ -1,4 +1,4 @@
-//! Requests between Bonfire and other Fediverse servers.
+//! Requests between Tison and other Fediverse servers.
 //!
 //! Every request is signed with the RSA key of a local user, following the
 //! HTTP Signatures draft (cavage-12) that Mastodon and the others use: the
@@ -7,7 +7,7 @@
 //!
 //! Other servers' addresses come from requests anyone can send, so outgoing
 //! requests only go to public addresses: without that, someone could make
-//! Bonfire call services of its own network.
+//! Tison call services of its own network.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -71,7 +71,7 @@ pub fn client(base_url: &str, allow_insecure: bool, timeout: Duration) -> Result
         }
     });
     let builder = reqwest::Client::builder()
-        .user_agent(format!("Bonfire/{} (+{base_url})", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("Tison/{} (+{base_url})", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
         .timeout(timeout)
         .redirect(redirects)
@@ -695,7 +695,7 @@ fn link(value: &Value) -> Option<String> {
     }
 }
 
-/// Reads what Bonfire needs from an actor's JSON.
+/// Reads what Tison needs from an actor's JSON.
 pub fn parse_actor(document: &Value) -> Result<NewRemoteActor, String> {
     let text = |value: &Value, name: &str| value.get(name).and_then(Value::as_str).map(str::to_string);
     let actor_id = text(document, "id").ok_or("actor without id")?;
@@ -725,7 +725,7 @@ pub fn parse_actor(document: &Value) -> Result<NewRemoteActor, String> {
         summary: super::activities::html_to_text(&text(document, "summary").unwrap_or_default()),
         username: text(document, "preferredUsername").unwrap_or_default(),
         display_name: text(document, "name").unwrap_or_default(),
-        // Only web addresses: shown as images and links on Bonfire's pages.
+        // Only web addresses: shown as images and links on Tison's pages.
         icon_url: document
             .get("icon")
             .and_then(link)
