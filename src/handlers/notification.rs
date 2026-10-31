@@ -371,15 +371,21 @@ async fn describe(pool: &PgPool, user_id: i32, change: Change) -> Option<Value> 
         Change::Read(id) => json!({ "read": id }),
         Change::AllRemoved => json!({ "removed": "all" }),
         Change::AllRead => json!({ "read": "all" }),
+        Change::Message(conversation_id) => json!({ "message": conversation_id }),
     })
 }
 
-/// Sends `message` with the current unread count added.
+/// Sends `message` with the current unread counts added: notifications and
+/// conversations of the messenger.
 async fn send(socket: &mut WebSocket, pool: &PgPool, user_id: i32, mut message: Value) -> Result<(), ()> {
     let unread = notification::unread_count(pool, user_id).await.map_err(|err| {
         tracing::warn!("live notifications: failed to count: {}", err);
     })?;
+    let unread_messages = crate::entities::message::unread_count(pool, user_id).await.map_err(|err| {
+        tracing::warn!("live notifications: failed to count messages: {}", err);
+    })?;
     message["unread"] = json!(unread);
+    message["unread_messages"] = json!(unread_messages);
     socket
         .send(Message::Text(message.to_string().into()))
         .await

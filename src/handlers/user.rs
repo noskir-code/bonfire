@@ -13,6 +13,9 @@ use tower_sessions::Session;
 use crate::{
     AppState,
     entities::comment::{self, ProfileComment},
+    entities::follow::{self, Counts, Listed},
+    entities::friend::{self, Added, State as FriendState},
+    entities::notification,
     entities::post::{self, Post},
     entities::session as remember_tokens,
     entities::user::{
@@ -23,7 +26,7 @@ use crate::{
         auth::{hash_password_blocking, verify_password_blocking},
         image::{self, IMAGE_FIELD, ImageError, ImageOwner, MAX_IMAGE_BYTES},
         session::{has_remember_cookie, remember, sign_in, signed_in},
-        system::{Layout, error_page, render_template},
+        system::{Layout, error_page, local_path, render_template},
     },
 };
 
@@ -133,11 +136,20 @@ enum ProfileTab {
     Posts,
     Comments,
     Friends,
+    Followers,
+    Following,
     About,
 }
 
 impl ProfileTab {
-    const ALL: [Self; 4] = [Self::Posts, Self::Comments, Self::Friends, Self::About];
+    const ALL: [Self; 6] = [
+        Self::Posts,
+        Self::Comments,
+        Self::Friends,
+        Self::Followers,
+        Self::Following,
+        Self::About,
+    ];
 
     fn slug(self) -> &'static str {
         match self {
@@ -145,6 +157,8 @@ impl ProfileTab {
             Self::Comments => "comments",
             Self::About => "about",
             Self::Friends => "friends",
+            Self::Followers => "followers",
+            Self::Following => "following",
         }
     }
 
@@ -154,6 +168,8 @@ impl ProfileTab {
             Self::Comments => "Comments",
             Self::About => "About me",
             Self::Friends => "Friends",
+            Self::Followers => "Followers",
+            Self::Following => "Following",
         }
     }
 
@@ -230,6 +246,19 @@ struct UserTemplate {
     posts: Vec<Post>,
     /// Only loaded for the comments tab.
     comments: Vec<ProfileComment>,
+    /// Followers or followed accounts, for those tabs.
+    accounts: Vec<Listed>,
+    counts: Counts,
+    /// Whether the viewer follows the user, `None` on their own profile and
+    /// for visitors.
+    viewer_follows: Option<bool>,
+    /// Where the viewer and the user are as friends, `None` like `viewer_follows`.
+    friendship: Option<FriendState>,
+    friend_count: i64,
+    /// For the friends tab. The requests only on the user's own profile.
+    friends: Vec<User>,
+    requests_received: Vec<User>,
+    requests_sent: Vec<User>,
     /// The actor for Fediverse servers, see `templates/base.html`.
     activitypub_url: Option<String>,
     /// Where the like and share buttons come back to.
@@ -264,6 +293,10 @@ pub async fn user_page(
     };
 
     let user = match user::find_by_username(pool, &username).await {
+        // Suspended: only the site's staff still see the profile.
+        Ok(Some(user)) if user.is_suspended() && !layout.viewer.as_ref().is_some_and(User::is_staff) => {
+            return error_page(layout, StatusCode::NOT_FOUND, "This account is suspended.");
+        }
         Ok(Some(user)) => user,
         Ok(None) => return error_page(layout, StatusCode::NOT_FOUND, "This user does not exist."),
         Err(err) => {
@@ -301,12 +334,61 @@ pub async fn user_page(
     } else {
         Vec::new()
     };
+    let accounts = match tab {
+        ProfileTab::Followers => follow::followers(pool, user.id).await,
+        ProfileTab::Following => follow::following(pool, user.id, is_own_profile).await,
+        _ => Ok(Vec::new()),
+    }
+    .unwrap_or_else(|err| {
+        tracing::error!("failed to load follows of {}: {}", user.username, err);
+        Vec::new()
+    });
+    let counts = follow::counts(pool, user.id).await.unwrap_or_else(|err| {
+        tracing::error!("failed to count follows of {}: {}", user.username, err);
+        Counts::default()
+    });
+    let viewer_follows = match &layout.viewer {
+        Some(viewer) if !is_own_profile => Some(follow::is_following(pool, viewer.id, user.id).await.unwrap_or(false)),
+        _ => None,
+    };
+    let friendship = match &layout.viewer {
+        Some(viewer) if !is_own_profile => Some(friend::state(pool, viewer.id, user.id).await.unwrap_or(FriendState::None)),
+        _ => None,
+    };
+    let friend_count = friend::count(pool, user.id).await.unwrap_or_else(|err| {
+        tracing::error!("failed to count friends of {}: {}", user.username, err);
+        0
+    });
+    let (friends, requests_received, requests_sent) = if tab == ProfileTab::Friends {
+        let loaded = async {
+            let friends = friend::friends(pool, user.id).await?;
+            if !is_own_profile {
+                return Ok::<_, sqlx::Error>((friends, Vec::new(), Vec::new()));
+            }
+            Ok((friends, friend::received(pool, user.id).await?, friend::sent(pool, user.id).await?))
+        }
+        .await;
+        loaded.unwrap_or_else(|err| {
+            tracing::error!("failed to load friends of {}: {}", user.username, err);
+            (Vec::new(), Vec::new(), Vec::new())
+        })
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
     let activitypub_url = state
         .federation
         .as_ref()
         .filter(|_| user.federation_enabled)
         .map(|federation| federation.actor_url(user.public_id));
     let template = UserTemplate {
+        accounts,
+        counts,
+        viewer_follows,
+        friendship,
+        friend_count,
+        friends,
+        requests_received,
+        requests_sent,
         title: format!("{} (@{})", user.display_name(), user.username),
         activitypub_url,
         layout,
@@ -320,6 +402,112 @@ pub async fn user_page(
         is_own_profile,
     };
     render_template(&template)
+}
+
+/// Follows or unfollows the user `username`, then goes back to `return`.
+async fn change_follow(state: AppState, session: Session, username: String, form: HashMap<String, String>, follow: bool) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let target = match user::find_by_username(&pool, &username).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return error_page(Layout::load(&state, &session).await, StatusCode::NOT_FOUND, "This user does not exist."),
+        Err(err) => {
+            tracing::error!("failed to load user {}: {}", username, err);
+            return error_page(Layout::load(&state, &session).await, StatusCode::INTERNAL_SERVER_ERROR, "Failed to load this user.");
+        }
+    };
+    let result = async {
+        if follow {
+            if follow::follow(&pool, me.id, target.id).await? {
+                notification::user_followed(&pool, target.id, me.id).await?;
+            }
+        } else if follow::unfollow(&pool, me.id, target.id).await? {
+            notification::user_unfollowed(&pool, target.id, me.id).await?;
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    if let Err(err) = result {
+        tracing::error!("failed to change the follow of @{} by @{}: {}", target.username, me.username, err);
+        return error_page(Layout::load(&state, &session).await, StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong, try again later.");
+    }
+    Redirect::to(&local_path(form.get("return"), &format!("/user/{}", target.username))).into_response()
+}
+
+/// "Add friend" (a request, or accepting theirs) or removing whatever links
+/// the two users, then back to `return`.
+async fn change_friend(state: AppState, session: Session, username: String, form: HashMap<String, String>, add: bool) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let other = match user::find_by_username(&pool, &username).await {
+        Ok(Some(other)) => other,
+        Ok(None) => return error_page(Layout::load(&state, &session).await, StatusCode::NOT_FOUND, "This user does not exist."),
+        Err(err) => {
+            tracing::error!("failed to load user {}: {}", username, err);
+            return error_page(Layout::load(&state, &session).await, StatusCode::INTERNAL_SERVER_ERROR, "Failed to load this user.");
+        }
+    };
+    let result = async {
+        if add {
+            match friend::request(&pool, me.id, other.id).await? {
+                Added::Requested => notification::friend_changed(&pool, other.id, me.id, false).await?,
+                Added::Accepted => {
+                    notification::friend_request_answered(&pool, me.id, other.id).await?;
+                    notification::friend_changed(&pool, other.id, me.id, true).await?;
+                }
+                Added::Nothing => {}
+            }
+        } else if friend::remove(&pool, me.id, other.id).await? != FriendState::None {
+            notification::friend_removed(&pool, me.id, other.id).await?;
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    if let Err(err) = result {
+        tracing::error!("failed to change the friendship of @{} and @{}: {}", me.username, other.username, err);
+        return error_page(Layout::load(&state, &session).await, StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong, try again later.");
+    }
+    Redirect::to(&local_path(form.get("return"), &format!("/user/{}", other.username))).into_response()
+}
+
+pub async fn add_friend(
+    State(state): State<AppState>,
+    session: Session,
+    Path(username): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    change_friend(state, session, username, form, true).await
+}
+
+pub async fn remove_friend(
+    State(state): State<AppState>,
+    session: Session,
+    Path(username): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    change_friend(state, session, username, form, false).await
+}
+
+pub async fn follow_user(
+    State(state): State<AppState>,
+    session: Session,
+    Path(username): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    change_follow(state, session, username, form, true).await
+}
+
+pub async fn unfollow_user(
+    State(state): State<AppState>,
+    session: Session,
+    Path(username): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    change_follow(state, session, username, form, false).await
 }
 
 /// Profile editing, for the signed-in user only. Visitors are sent to the login page.

@@ -1,0 +1,27 @@
+{# One message of a conversation, on the page and sent live (see
+   handlers/messenger.rs). The viewer's own are on the right, with "Delete". #}
+{% macro message_item(message, conversation_id) %}
+<li class="message{% if message.is_mine %} mine{% endif %}" id="message-{{ message.id }}" data-message-id="{{ message.id }}">
+    {% if !message.is_mine %}
+    <a href="{{ message.author.profile_url() }}" class="message-avatar" aria-hidden="true" tabindex="-1">
+        {% if let Some(url) = message.author.photo_url() %}
+        <img src="{{ url }}" alt="" class="nav-avatar" />
+        {% else %}
+        <span class="nav-avatar placeholder">{{ message.author.initial() }}</span>
+        {% endif %}
+    </a>
+    {% endif %}
+    <div class="message-bubble">
+        <p class="post-body" data-message-body>{{ message.body_html()|safe }}</p>
+        <div class="message-meta">
+            <time datetime="{{ message.created_at_iso() }}" data-relative>{{ message.created_at_label() }}</time>
+            {% if message.edited_at.is_some() %} · edited{% endif %}
+            {% if message.is_mine %}
+            <form action="/messenger/{{ conversation_id }}/messages/{{ message.id }}/delete" method="post" class="inline" data-confirm="Delete this message for both of you?">
+                <button type="submit" class="action danger">Delete</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</li>
+{% endmacro %}

@@ -36,7 +36,7 @@ use sqlx::{
 };
 use tokio::task::JoinSet;
 
-use super::{ACTIVITY_JSON, Federation, base64};
+use super::{ACTIVITY_JSON, Federation, Web, base64};
 use crate::entities::federation::{self as store, Delivery, NewRemoteActor, RemoteActor, Signer};
 
 /// Larger answers from other servers are refused: an actor or an activity is
@@ -58,9 +58,9 @@ const ACCEPT_ACTIVITY: &str =
 
 // --- Outgoing requests ---
 
-/// HTTP client for other servers: short timeouts, few redirects, and public
-/// addresses only unless `allow_insecure`.
-pub fn client(base_url: &str, allow_insecure: bool) -> Result<reqwest::Client, String> {
+/// HTTP client for other servers: `timeout` for the whole request, few
+/// redirects, and public addresses only unless `allow_insecure`.
+pub fn client(base_url: &str, allow_insecure: bool, timeout: Duration) -> Result<reqwest::Client, String> {
     let redirects = redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= 3 {
             attempt.error("too many redirects")
@@ -73,7 +73,7 @@ pub fn client(base_url: &str, allow_insecure: bool) -> Result<reqwest::Client, S
     let builder = reqwest::Client::builder()
         .user_agent(format!("Bonfire/{} (+{base_url})", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
+        .timeout(timeout)
         .redirect(redirects)
         // A proxy from the environment would bypass the address check.
         .no_proxy();
@@ -187,10 +187,14 @@ impl std::fmt::Display for FetchError {
 /// GETs ActivityPub JSON, signed by `key` when given: servers in "secure mode"
 /// (authorized fetch) only answer signed requests.
 pub async fn fetch(federation: &Federation, url: &str, key: Option<&LocalKey>) -> Result<Value, FetchError> {
+    get_json(federation, url, key, ACCEPT_ACTIVITY).await
+}
+
+async fn get_json(federation: &Federation, url: &str, key: Option<&LocalKey>, accept: &str) -> Result<Value, FetchError> {
     let url = Url::parse(url).map_err(|err| FetchError::Failed(format!("invalid address {url}: {err}")))?;
     check_url(&url, federation.allow_insecure).map_err(FetchError::Failed)?;
 
-    let mut request = federation.client.get(url.clone()).header(header::ACCEPT, ACCEPT_ACTIVITY);
+    let mut request = federation.client.get(url.clone()).header(header::ACCEPT, accept);
     if let Some(key) = key {
         for (name, value) in signed_headers(key, &Method::GET, &url, None) {
             request = request.header(name, value);
@@ -218,6 +222,83 @@ pub async fn fetch(federation: &Federation, url: &str, key: Option<&LocalKey>) -
         body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|err| FetchError::Failed(format!("{url} is not JSON: {err}")))
+}
+
+/// Media types the proxy serves, with the extension of the cached file.
+/// Anything else (HTML, SVG with scripts...) is refused.
+pub fn media_extension(media_type: &str) -> Option<&'static str> {
+    let media_type = media_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    Some(match media_type.as_str() {
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/avif" => "avif",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" | "audio/opus" => "ogg",
+        "audio/mp4" | "audio/x-m4a" | "audio/aac" => "m4a",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
+        "audio/flac" | "audio/x-flac" => "flac",
+        "audio/webm" => "weba",
+        _ => return None,
+    })
+}
+
+/// Downloads a picture, video or sound to `path`, at most `max_bytes`.
+/// Written next to it first, so a failed download leaves nothing. Returns
+/// the extension of its type, see `media_extension`.
+pub async fn download_media(web: &Web, url: &str, path: &std::path::Path, max_bytes: usize) -> Result<&'static str, String> {
+    use tokio::io::AsyncWriteExt;
+
+    let url = Url::parse(url).map_err(|err| format!("invalid address {url}: {err}"))?;
+    check_url(&url, web.allow_insecure)?;
+    let mut response = web
+        .media
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|err| format!("request to {url} failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("{url} answered {}", response.status()));
+    }
+    let media_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let extension = media_extension(media_type).ok_or_else(|| format!("{url} is not a picture, video or sound: {media_type}"))?;
+    if response.content_length().is_some_and(|length| length as usize > max_bytes) {
+        return Err(format!("{url} is larger than {max_bytes} bytes"));
+    }
+
+    let partial = path.with_extension(format!("{}.part", Utc::now().timestamp_micros()));
+    let written = async {
+        let mut file = tokio::fs::File::create(&partial)
+            .await
+            .map_err(|err| format!("failed to create {}: {err}", partial.display()))?;
+        let mut size = 0;
+        while let Some(chunk) = response.chunk().await.map_err(|err| format!("failed to read {url}: {err}"))? {
+            size += chunk.len();
+            if size > max_bytes {
+                return Err(format!("{url} is larger than {max_bytes} bytes"));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|err| format!("failed to write {}: {err}", partial.display()))?;
+        }
+        file.flush().await.map_err(|err| format!("failed to write {}: {err}", partial.display()))?;
+        tokio::fs::rename(&partial, path)
+            .await
+            .map_err(|err| format!("failed to save {}: {err}", path.display()))
+    }
+    .await;
+    if written.is_err() {
+        let _ = tokio::fs::remove_file(&partial).await;
+    }
+    written.map(|()| extension)
 }
 
 /// Why a delivery failed. `GiveUp` when trying again can't help, like a 403.
@@ -495,6 +576,72 @@ fn check_digest(headers: &HeaderMap, body: &[u8]) -> Result<(), String> {
 
 // --- Remote actors ---
 
+/// Known accounts are fetched again after this, for a new name or avatar.
+const ACTOR_REFRESH_HOURS: i64 = 24;
+
+/// The actor at `url`, from the cache when fetched recently, else fetched
+/// with `key` and saved.
+pub async fn fetch_actor(federation: &Federation, pool: &PgPool, url: &str, key: &LocalKey) -> Result<RemoteActor, String> {
+    let url = url.split('#').next().unwrap_or(url);
+    let known = store::find_actor(pool, url)
+        .await
+        .map_err(|err| format!("failed to load actor {url}: {err}"))?;
+    if let Some((actor, fetched_at)) = &known
+        && Utc::now().signed_duration_since(*fetched_at).num_hours() < ACTOR_REFRESH_HOURS
+    {
+        return Ok(actor.clone());
+    }
+    let document = match (fetch(federation, url, Some(key)).await, known) {
+        (Ok(document), _) => document,
+        // Unreachable for now: the old copy is better than nothing.
+        (Err(FetchError::Failed(_)), Some((actor, _))) => return Ok(actor),
+        (Err(err), _) => return Err(format!("failed to fetch actor {url}: {err}")),
+    };
+    let actor = parse_actor(&document)?;
+    if !same_host(&actor.actor_id, url) {
+        return Err(format!("{url} gave an actor of another server, {}", actor.actor_id));
+    }
+    store::save_actor(pool, &actor)
+        .await
+        .map_err(|err| format!("failed to save actor {}: {err}", actor.actor_id))
+}
+
+/// The actor address of `@user@domain` (or `user@domain`), asked to its
+/// server with WebFinger.
+pub async fn webfinger(federation: &Federation, account: &str) -> Result<String, String> {
+    let account = account.trim().trim_start_matches('@');
+    let (user, domain) = account
+        .split_once('@')
+        .filter(|(user, domain)| !user.is_empty() && !domain.is_empty() && !domain.contains(['/', '?', '#', '@']))
+        .ok_or_else(|| format!("{account} is not an address like @name@server"))?;
+    // Only for local tests of two servers, see `FEDERATION_ALLOW_INSECURE`.
+    let schemes: &[&str] = if federation.allow_insecure { &["https", "http"] } else { &["https"] };
+    let mut last_error = String::new();
+    for scheme in schemes {
+        let url = format!("{scheme}://{domain}/.well-known/webfinger?resource=acct:{user}@{domain}");
+        match get_json(federation, &url, None, "application/jrd+json, application/json").await {
+            Ok(document) => {
+                return document["links"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|link| {
+                        link["rel"] == "self"
+                            && link["type"].as_str().is_some_and(|kind| {
+                                kind.starts_with(ACTIVITY_JSON) || kind.contains("activitystreams")
+                            })
+                    })
+                    .and_then(|link| link["href"].as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{domain} gave no ActivityPub account for {user}"));
+            }
+            Err(FetchError::Gone) => return Err(format!("{account} doesn't exist")),
+            Err(err) => last_error = err.to_string(),
+        }
+    }
+    Err(last_error)
+}
+
 /// Fetches the actor owning `key_id` and saves it.
 async fn refresh_actor_by_key(
     federation: &Federation,
@@ -569,6 +716,13 @@ pub fn parse_actor(document: &Value) -> Result<NewRemoteActor, String> {
         }
     }
     Ok(NewRemoteActor {
+        // Only on their own server.
+        followers_url: document
+            .get("followers")
+            .and_then(Value::as_str)
+            .filter(|url| same_host(url, &actor_id))
+            .map(str::to_string),
+        summary: super::activities::html_to_text(&text(document, "summary").unwrap_or_default()),
         username: text(document, "preferredUsername").unwrap_or_default(),
         display_name: text(document, "name").unwrap_or_default(),
         // Only web addresses: shown as images and links on Bonfire's pages.

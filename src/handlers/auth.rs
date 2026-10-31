@@ -447,6 +447,10 @@ pub async fn login(
             return show_errors(layout, StatusCode::INTERNAL_SERVER_ERROR, vec![server_error()]);
         }
     };
+    if signed_in_user.is_suspended() {
+        let errors = vec![FormError::field("login", "This account is suspended by the site's moderators.")];
+        return show_errors(layout, StatusCode::FORBIDDEN, errors);
+    }
     if let Err(err) = sign_in(&session, &signed_in_user).await {
         tracing::error!("failed to sign in user {}: {}", user_id, err);
         return show_errors(layout, StatusCode::INTERNAL_SERVER_ERROR, vec![server_error()]);

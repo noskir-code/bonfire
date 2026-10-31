@@ -6,6 +6,8 @@ use sqlx::{
 
 use crate::entities::{
     author::{Author, remote_author_columns},
+    media::{self, Attachment},
+    preview::{self, LinkPreview},
     schema::{Column, Index, Table},
     user::user_columns,
 };
@@ -36,12 +38,20 @@ pub const TABLE: Table = Table {
             .references("communities(id) ON DELETE CASCADE"),
         Column::new("body", "TEXT"),
         Column::new("visibility", "TEXT").default("'public'"),
+        // Its media are hidden until clicked, like on Mastodon.
+        Column::new("sensitive", "BOOLEAN").default("FALSE"),
         Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
         Column::new("updated_at", "TIMESTAMPTZ").default("NOW()"),
+        // Last edit by its author, shown as "edited".
+        Column::new("edited_at", "TIMESTAMPTZ").nullable(),
+        // Its first link was looked at for a preview, see `crate::preview`.
+        // Reset by an edit.
+        Column::new("link_checked", "BOOLEAN").default("FALSE"),
     ],
     indexes: &[
         // Home timeline, and the posts of one user.
         Index::new("posts_created_at_idx", "created_at DESC"),
+        Index::new("posts_remote_actor_created_at_idx", "remote_actor_id, created_at DESC"),
         Index::new("posts_user_id_created_at_idx", "user_id, created_at DESC"),
         Index::new("posts_community_created_at_idx", "community_id, created_at DESC"),
         Index::unique("posts_ap_id_idx", "ap_id"),
@@ -80,9 +90,13 @@ pub enum Visibility {
     Public,
     /// Only the author.
     Private,
+    /// Only for posts of other servers: the local users following its author
+    /// (Mastodon's "followers only").
+    Followers,
 }
 
 impl Visibility {
+    /// What local users can choose.
     pub const ALL: [Self; 2] = [Self::Public, Self::Private];
 
     /// Stored in the database and sent by the form.
@@ -90,6 +104,7 @@ impl Visibility {
         match self {
             Self::Public => "public",
             Self::Private => "private",
+            Self::Followers => "followers",
         }
     }
 
@@ -97,11 +112,14 @@ impl Visibility {
         match self {
             Self::Public => "Public",
             Self::Private => "Only me",
+            Self::Followers => "Followers only",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|visibility| visibility.as_str() == value)
+        [Self::Public, Self::Private, Self::Followers]
+            .into_iter()
+            .find(|visibility| visibility.as_str() == value)
     }
 }
 
@@ -125,12 +143,21 @@ pub struct PostCommunity {
     pub is_public: bool,
 }
 
+/// Who shared a post shown on a profile or in the feed.
+pub struct Sharer {
+    /// `alice`, or `bob@misskey.io` for an account of another server.
+    pub name: String,
+    pub url: String,
+}
+
 /// A post with its author and reactions, as seen by one viewer.
 pub struct Post {
     pub id: i64,
     pub body: String,
     pub visibility: Visibility,
+    pub sensitive: bool,
     pub created_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
     pub author: Author,
     pub community: Option<PostCommunity>,
     /// ActivityPub id and page, for posts received from other servers.
@@ -144,8 +171,12 @@ pub struct Post {
     pub shared: bool,
     /// Whether the viewer wrote it.
     pub is_own: bool,
-    /// Set when the post is on a profile because that user shared it.
-    pub shared_by: Option<String>,
+    /// Set when the post is on a profile or in the feed because they shared it.
+    pub shared_by: Option<Sharer>,
+    /// Media of posts received from other servers.
+    pub attachments: Vec<Attachment>,
+    /// The card of its first link, when it has no media.
+    pub preview: Option<LinkPreview>,
 }
 
 impl Post {
@@ -156,7 +187,9 @@ impl Post {
             body: row.try_get("body")?,
             // An unknown value is treated as the most restrictive one.
             visibility: Visibility::parse(&visibility).unwrap_or(Visibility::Private),
+            sensitive: row.try_get("sensitive")?,
             created_at: row.try_get("posted_at")?,
+            edited_at: row.try_get("edited_at")?,
             author: Author::from_row(row)?,
             community: match row.try_get::<Option<i64>, _>("community_id")? {
                 Some(id) => Some(PostCommunity {
@@ -176,12 +209,35 @@ impl Post {
             liked: row.try_get("liked")?,
             shared: row.try_get("shared")?,
             is_own: row.try_get("is_own")?,
-            shared_by: row.try_get("shared_by")?,
+            shared_by: match (row.try_get::<Option<String>, _>("shared_by")?, row.try_get::<Option<String>, _>("shared_by_url")?) {
+                (Some(name), Some(url)) => Some(Sharer { name, url }),
+                _ => None,
+            },
+            attachments: Vec::new(),
+            preview: None,
         })
     }
 
     pub fn is_private(&self) -> bool {
         self.visibility == Visibility::Private
+    }
+
+    /// The text as HTML, with clickable addresses, see `linkify`.
+    pub fn body_html(&self) -> String {
+        crate::linkify::to_html(&self.body)
+    }
+
+    pub fn is_followers_only(&self) -> bool {
+        self.visibility == Visibility::Followers
+    }
+
+    /// Written here by the viewer: they can edit it.
+    pub fn can_edit(&self) -> bool {
+        self.is_own && self.author.local().is_some()
+    }
+
+    pub fn edited_at_iso(&self) -> Option<String> {
+        self.edited_at.as_ref().map(time_iso)
     }
 
     /// Only someone else's public posts can be shared, not those of a
@@ -201,23 +257,37 @@ impl Post {
     }
 }
 
+/// Likes of the post `p`, here and on other servers.
+macro_rules! like_count {
+    () => {
+        "((SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id)
+          + (SELECT COUNT(*) FROM remote_reactions rl WHERE rl.post_id = p.id AND rl.kind = 'like'))"
+    };
+}
+
 /// Columns read by `Post::from_row`. `$1` is always the viewer id (NULL for
-/// visitors), `$shared_by` the SQL giving `shared_by`. Queries using it must
-/// only show what the viewer can see, with `post_visible!()`.
+/// visitors), `$shared_by` and `$shared_by_url` the SQL giving who shared it
+/// and their page. Queries using it must only show what the viewer can see,
+/// with `post_visible!()`.
 macro_rules! post_select {
-    ($shared_by:literal) => {
+    ($shared_by:literal, $shared_by_url:literal) => {
         concat!(
-            "SELECT p.id AS post_id, p.body, p.visibility, p.created_at AS posted_at, p.ap_id, p.ap_url,
-                    COALESCE(p.user_id = $1, FALSE) AS is_own,
-                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS like_count,
+            "SELECT p.id AS post_id, p.body, p.visibility, p.sensitive, p.created_at AS posted_at,
+                    p.edited_at, p.ap_id, p.ap_url,
+                    COALESCE(p.user_id = $1, FALSE) AS is_own, ",
+            like_count!(),
+            " AS like_count,
                     (SELECT COUNT(*) FROM comments pc WHERE pc.post_id = p.id) AS comment_count,
-                    (SELECT COUNT(*) FROM post_shares s WHERE s.post_id = p.id) AS share_count,
+                    (SELECT COUNT(*) FROM post_shares s WHERE s.post_id = p.id)
+                    + (SELECT COUNT(*) FROM remote_reactions rs WHERE rs.post_id = p.id AND rs.kind = 'share') AS share_count,
                     EXISTS (SELECT 1 FROM post_likes l WHERE l.post_id = p.id AND l.user_id = $1) AS liked,
                     EXISTS (SELECT 1 FROM post_shares s WHERE s.post_id = p.id AND s.user_id = $1) AS shared,
                     p.community_id, cm.public_id AS community_public_id, cm.slug AS community_slug,
                     cm.name AS community_name, cm.visibility AS community_visibility, ",
             $shared_by,
             " AS shared_by, ",
+            $shared_by_url,
+            " AS shared_by_url, ",
             user_columns!("u."),
             ", ",
             remote_author_columns!(),
@@ -230,13 +300,19 @@ macro_rules! post_select {
 }
 
 /// Whether the viewer `$1` can see the post `p` (its community joined as
-/// `cm`): their own posts, public posts outside communities, and posts of
-/// communities that aren't banned and are public or have the viewer as member.
+/// `cm`): their own posts, public posts outside communities, posts of
+/// communities that aren't banned and are public or have the viewer as
+/// member, and followers-only posts of other servers when the viewer follows
+/// their author. Never posts of suspended users.
 macro_rules! post_visible {
     () => {
-        "(COALESCE(p.user_id = $1, FALSE) OR (p.visibility = 'public' AND (p.community_id IS NULL OR (
+        "((NOT EXISTS (SELECT 1 FROM users su WHERE su.id = p.user_id AND su.suspended_at IS NOT NULL))
+          AND (COALESCE(p.user_id = $1, FALSE) OR (p.visibility = 'public' AND (p.community_id IS NULL OR (
             cm.status <> 'banned' AND (cm.visibility = 'public' OR EXISTS (
-                SELECT 1 FROM community_members mm WHERE mm.community_id = cm.id AND mm.user_id = $1))))))"
+                SELECT 1 FROM community_members mm WHERE mm.community_id = cm.id AND mm.user_id = $1)))))
+          OR (p.visibility = 'followers' AND p.remote_actor_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM federation_following ff
+                WHERE ff.actor_id = p.remote_actor_id AND ff.user_id = $1 AND ff.accepted))))"
     };
 }
 pub(crate) use post_visible;
@@ -291,31 +367,66 @@ pub async fn create(
     .await
 }
 
-/// A post received from another server, in a community. Returns `None` when
-/// a post with this ActivityPub id is already stored.
+/// A post of another server: what it says, read from its Note.
+pub struct RemotePost<'a> {
+    pub ap_id: &'a str,
+    pub ap_url: Option<&'a str>,
+    pub body: &'a str,
+    pub visibility: Visibility,
+    pub sensitive: bool,
+    pub published: Option<DateTime<Utc>>,
+}
+
+/// A post received from another server, in a community or from an account
+/// followed here. Returns `None` when a post with this ActivityPub id is
+/// already stored.
 pub async fn create_remote(
     pool: &PgPool,
     remote_actor_id: i64,
-    community_id: i64,
-    ap_id: &str,
-    ap_url: Option<&str>,
-    body: &str,
-    published: Option<DateTime<Utc>>,
+    community_id: Option<i64>,
+    post: &RemotePost<'_>,
 ) -> Result<Option<i64>, sqlx::Error> {
     sqlx::query_scalar(
-        "INSERT INTO posts (remote_actor_id, community_id, ap_id, ap_url, body, created_at)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()))
+        "INSERT INTO posts (remote_actor_id, community_id, ap_id, ap_url, body, created_at, visibility, sensitive)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()), $7, $8)
          ON CONFLICT (ap_id) DO NOTHING
          RETURNING id",
     )
     .bind(remote_actor_id)
     .bind(community_id)
-    .bind(ap_id)
-    .bind(ap_url)
-    .bind(body)
-    .bind(published)
+    .bind(post.ap_id)
+    .bind(post.ap_url)
+    .bind(post.body)
+    .bind(post.published)
+    .bind(post.visibility.as_str())
+    .bind(post.sensitive)
     .fetch_optional(pool)
     .await
+}
+
+/// Changes the text of the user's own post. Returns `false` when it isn't theirs.
+pub async fn update_own(pool: &PgPool, post_id: i64, user_id: i32, body: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query(
+        "UPDATE posts SET body = $3, edited_at = NOW(), updated_at = NOW(), link_checked = FALSE
+         WHERE id = $1 AND user_id = $2",
+    )
+    .bind(post_id)
+    .bind(user_id)
+    .bind(body)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0)
+}
+
+/// Deletes a post with its comments and reactions.
+pub async fn delete(pool: &PgPool, post_id: i64) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM posts WHERE id = $1")
+        .bind(post_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
 }
 
 /// A post or comment stored from another server, by its ActivityPub id.
@@ -349,13 +460,20 @@ pub async fn find_remote_object(pool: &PgPool, remote_actor_id: i64, ap_id: &str
     .transpose()
 }
 
-/// The text of a post or comment changed on its server.
-pub async fn update_remote_body(pool: &PgPool, object: &RemoteObject, body: &str) -> Result<(), sqlx::Error> {
+/// A post or comment edited on its server.
+pub async fn update_remote(pool: &PgPool, object: &RemoteObject, body: &str, sensitive: bool) -> Result<(), sqlx::Error> {
     let (query, id) = match object {
-        RemoteObject::Post(id, _) => ("UPDATE posts SET body = $1, updated_at = NOW() WHERE id = $2", *id),
-        RemoteObject::Comment(id) => ("UPDATE comments SET body = $1, updated_at = NOW() WHERE id = $2", *id),
+        RemoteObject::Post(id, _) => (
+            "UPDATE posts SET body = $1, sensitive = $3, edited_at = NOW(), updated_at = NOW(), link_checked = FALSE
+             WHERE id = $2",
+            *id,
+        ),
+        RemoteObject::Comment(id) => (
+            "UPDATE comments SET body = $1, sensitive = $3, edited_at = NOW(), updated_at = NOW() WHERE id = $2",
+            *id,
+        ),
     };
-    sqlx::query(query).bind(body).bind(id).execute(pool).await?;
+    sqlx::query(query).bind(body).bind(id).bind(sensitive).execute(pool).await?;
     Ok(())
 }
 
@@ -388,18 +506,39 @@ pub async fn find_by_ap_id(pool: &PgPool, ap_id: &str) -> Result<Option<i64>, sq
         .await
 }
 
-fn to_posts(rows: Vec<PgRow>) -> Result<Vec<Post>, sqlx::Error> {
-    rows.iter().map(Post::from_row).collect()
+/// The posts of the rows, with their attachments, or else the preview of
+/// their first link.
+async fn to_posts(pool: &PgPool, rows: Vec<PgRow>) -> Result<Vec<Post>, sqlx::Error> {
+    let mut posts = rows.iter().map(Post::from_row).collect::<Result<Vec<_>, _>>()?;
+    let remote: Vec<i64> = posts.iter().filter(|post| post.author.is_remote()).map(|post| post.id).collect();
+    let mut attachments = media::for_posts(pool, &remote).await?;
+    for post in &mut posts {
+        if let Some(found) = attachments.remove(&post.id) {
+            post.attachments = found;
+        }
+    }
+    let links: Vec<Option<String>> = posts
+        .iter()
+        .map(|post| post.attachments.is_empty().then(|| crate::linkify::first_link(&post.body)).flatten())
+        .collect();
+    let urls: Vec<String> = links.iter().flatten().cloned().collect();
+    let previews = preview::find_many(pool, &urls).await?;
+    for (post, link) in posts.iter_mut().zip(links) {
+        post.preview = link.and_then(|link| previews.get(&link).cloned());
+    }
+    Ok(posts)
 }
 
-/// Public posts of everyone, and the viewer's own private ones. Posts of the
-/// communities the viewer ignores are left out.
+/// Public posts of everyone here and of communities, and the viewer's own
+/// private ones. Posts of the communities the viewer ignores are left out, and
+/// posts of accounts followed from other servers only go to the feed.
 pub async fn timeline(pool: &PgPool, viewer_id: Option<i32>) -> Result<Vec<Post>, sqlx::Error> {
     let rows = sqlx::query(concat!(
-        post_select!("NULL::text"),
+        post_select!("NULL::text", "NULL::text"),
         " WHERE ",
         post_visible!(),
-        " AND NOT EXISTS (SELECT 1 FROM community_ignores ci
+        " AND (p.remote_actor_id IS NULL OR p.community_id IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM community_ignores ci
                           WHERE ci.community_id = p.community_id AND ci.user_id = $1)
          ORDER BY p.created_at DESC, p.id DESC
          LIMIT $2"
@@ -408,7 +547,74 @@ pub async fn timeline(pool: &PgPool, viewer_id: Option<i32>) -> Result<Vec<Post>
     .bind(PAGE_SIZE)
     .fetch_all(pool)
     .await?;
-    to_posts(rows)
+    to_posts(pool, rows).await
+}
+
+/// The viewer's feed, newest first: their posts and shares, and the posts and
+/// shares (boosts, renotes) of their friends and of the users they follow,
+/// here and on other servers.
+pub async fn feed(pool: &PgPool, viewer_id: i32) -> Result<Vec<Post>, sqlx::Error> {
+    let rows = sqlx::query(concat!(
+        "WITH followed AS (
+            SELECT actor_id FROM federation_following WHERE user_id = $1 AND accepted
+         ), followed_users AS (
+            SELECT followed_id FROM user_follows WHERE follower_id = $1
+            UNION
+            SELECT CASE WHEN requester_id = $1 THEN addressee_id ELSE requester_id END FROM friendships
+            WHERE (requester_id = $1 OR addressee_id = $1) AND accepted
+         ), entries AS (
+            SELECT p.id AS entry_post_id, p.created_at AS entry_at, NULL::integer AS sharer_user_id,
+                   NULL::bigint AS sharer_actor_id
+            FROM posts p
+            WHERE p.user_id = $1 OR p.user_id IN (SELECT followed_id FROM followed_users)
+               OR (p.community_id IS NULL AND p.remote_actor_id IN (SELECT actor_id FROM followed))
+            UNION ALL
+            SELECT s.post_id, s.created_at, s.user_id, NULL FROM post_shares s
+            WHERE s.user_id = $1 OR s.user_id IN (SELECT followed_id FROM followed_users)
+            UNION ALL
+            SELECT r.post_id, r.created_at, NULL, r.actor_id FROM remote_reactions r
+            WHERE r.kind = 'share' AND r.post_id IS NOT NULL AND r.actor_id IN (SELECT actor_id FROM followed)
+         ), feed AS (
+            -- A post shared several times appears once, at its latest share.
+            SELECT DISTINCT ON (entry_post_id) * FROM entries ORDER BY entry_post_id, entry_at DESC
+         ) ",
+        post_select!(
+            "CASE WHEN f.sharer_user_id IS NOT NULL AND p.user_id IS DISTINCT FROM f.sharer_user_id THEN su.username
+                  WHEN f.sharer_actor_id IS NOT NULL
+                  THEN sa.username || '@' || substring(sa.actor_id from '://([^/]+)') END",
+            "CASE WHEN f.sharer_user_id IS NOT NULL AND p.user_id IS DISTINCT FROM f.sharer_user_id THEN '/user/' || su.username
+                  WHEN f.sharer_actor_id IS NOT NULL THEN '/remote/' || sa.id END"
+        ),
+        " JOIN feed f ON f.entry_post_id = p.id
+          LEFT JOIN users su ON su.id = f.sharer_user_id
+          LEFT JOIN federation_actors sa ON sa.id = f.sharer_actor_id
+         WHERE ",
+        post_visible!(),
+        " ORDER BY f.entry_at DESC, p.id DESC
+         LIMIT $2"
+    ))
+    .bind(viewer_id)
+    .bind(PAGE_SIZE)
+    .fetch_all(pool)
+    .await?;
+    to_posts(pool, rows).await
+}
+
+/// Posts of an account of another server stored here, newest first.
+pub async fn by_remote_author(pool: &PgPool, remote_actor_id: i64, viewer_id: Option<i32>) -> Result<Vec<Post>, sqlx::Error> {
+    let rows = sqlx::query(concat!(
+        post_select!("NULL::text", "NULL::text"),
+        " WHERE p.remote_actor_id = $2 AND ",
+        post_visible!(),
+        " ORDER BY p.created_at DESC, p.id DESC
+         LIMIT $3"
+    ))
+    .bind(viewer_id)
+    .bind(remote_actor_id)
+    .bind(PAGE_SIZE)
+    .fetch_all(pool)
+    .await?;
+    to_posts(pool, rows).await
 }
 
 /// What a profile shows: the posts the user wrote and the ones they shared,
@@ -419,7 +625,10 @@ pub async fn by_author(
     viewer_id: Option<i32>,
 ) -> Result<Vec<Post>, sqlx::Error> {
     let rows = sqlx::query(concat!(
-        post_select!("CASE WHEN p.user_id <> $2 THEN sharer.username END"),
+        post_select!(
+            "CASE WHEN p.user_id IS DISTINCT FROM $2 THEN sharer.username END",
+            "CASE WHEN p.user_id IS DISTINCT FROM $2 THEN '/user/' || sharer.username END"
+        ),
         " LEFT JOIN post_shares ps ON ps.post_id = p.id AND ps.user_id = $2
           LEFT JOIN users sharer ON sharer.id = ps.user_id
          WHERE (p.user_id = $2 OR ps.user_id IS NOT NULL)
@@ -434,7 +643,7 @@ pub async fn by_author(
     .bind(PAGE_SIZE)
     .fetch_all(pool)
     .await?;
-    to_posts(rows)
+    to_posts(pool, rows).await
 }
 
 /// Order of a community's posts.
@@ -487,7 +696,7 @@ pub async fn for_community(
     macro_rules! ordered {
         ($order:literal) => {
             concat!(
-                post_select!("NULL::text"),
+                post_select!("NULL::text", "NULL::text"),
                 " WHERE p.community_id = $2 AND ",
                 post_visible!(),
                 " ORDER BY ",
@@ -504,6 +713,7 @@ pub async fn for_community(
         // inside an ORDER BY expression.
         Sort::Hot => ordered!(
             "((SELECT COUNT(*) FROM post_likes hl WHERE hl.post_id = p.id)
+              + (SELECT COUNT(*) FROM remote_reactions hr WHERE hr.post_id = p.id AND hr.kind = 'like')
               + (SELECT COUNT(*) FROM comments hc WHERE hc.post_id = p.id) + 1)
               / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600 + 2, 1.5) DESC, p.id DESC"
         ),
@@ -514,23 +724,40 @@ pub async fn for_community(
         .bind(PAGE_SIZE)
         .fetch_all(pool)
         .await?;
-    to_posts(rows)
+    to_posts(pool, rows).await
 }
 
 /// One post, `None` if it doesn't exist or the viewer can't see it.
 pub async fn find(pool: &PgPool, post_id: i64, viewer_id: Option<i32>) -> Result<Option<Post>, sqlx::Error> {
-    sqlx::query(concat!(
-        post_select!("NULL::text"),
+    let rows = sqlx::query(concat!(
+        post_select!("NULL::text", "NULL::text"),
         " WHERE p.id = $2 AND ",
         post_visible!()
     ))
     .bind(viewer_id)
     .bind(post_id)
     .fetch_optional(pool)
-    .await?
-    .as_ref()
-    .map(Post::from_row)
-    .transpose()
+    .await?;
+    Ok(to_posts(pool, rows.into_iter().collect()).await?.pop())
+}
+
+/// A post other Fediverse servers may hear about: what visitors can see, and
+/// followers-only posts of other servers (only their author is told, see
+/// `handlers::notifier`).
+pub async fn find_federable(pool: &PgPool, post_id: i64) -> Result<Option<Post>, sqlx::Error> {
+    if let Some(post) = find(pool, post_id, None).await? {
+        return Ok(Some(post));
+    }
+    let rows = sqlx::query(concat!(
+        post_select!("NULL::text", "NULL::text"),
+        " WHERE p.id = $2 AND p.visibility = 'followers' AND p.remote_actor_id IS NOT NULL
+           AND $1::integer IS NULL"
+    ))
+    .bind(None::<i32>)
+    .bind(post_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(to_posts(pool, rows.into_iter().collect()).await?.pop())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -590,4 +817,25 @@ pub async fn toggle(
     // DO UPDATE instead of DO NOTHING so a double click still returns the row.
     let reacted_at = sqlx::query_scalar(insert).bind(post_id).bind(user_id).fetch_one(pool).await?;
     Ok(Some(Toggled { active: true, reacted_at }))
+}
+
+#[cfg(test)]
+mod tests {
+    /// The rule is pasted into many queries: unbalanced, every post is hidden.
+    #[test]
+    fn visibility_rule_is_balanced() {
+        let rule = post_visible!();
+        let mut depth = 0i32;
+        for letter in rule.chars() {
+            match letter {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "a parenthesis closes too early");
+        }
+        assert_eq!(depth, 0);
+        // One group: safe next to AND and OR.
+        assert!(rule.starts_with('(') && rule.ends_with(')'));
+    }
 }

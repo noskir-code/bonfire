@@ -23,6 +23,8 @@ mod base64;
 pub mod federation;
 pub mod linker;
 
+use std::time::Duration;
+
 use reqwest::Url;
 use tokio::sync::Notify;
 
@@ -42,6 +44,29 @@ pub struct Federation {
     deliveries: Notify,
 }
 
+/// Requests to other websites outside ActivityPub: the media proxy (see
+/// `handlers::media`) and link previews (see `crate::preview`). Exists even
+/// when federation is off, with the same protection: public addresses only.
+pub struct Web {
+    /// Allows `http://` and private addresses, see `FEDERATION_ALLOW_INSECURE`.
+    pub allow_insecure: bool,
+    /// For web pages: short timeout.
+    pub(crate) pages: reqwest::Client,
+    /// For pictures and videos, slower to download.
+    pub(crate) media: reqwest::Client,
+}
+
+impl Web {
+    pub fn new(base_url: &str, allow_insecure: bool) -> Result<Self, String> {
+        let base_url = base_url.trim_end_matches('/');
+        Ok(Self {
+            allow_insecure,
+            pages: linker::client(base_url, allow_insecure, Duration::from_secs(10))?,
+            media: linker::client(base_url, allow_insecure, Duration::from_secs(120))?,
+        })
+    }
+}
+
 impl Federation {
     pub fn new(base_url: &str, allow_insecure: bool) -> Result<Self, String> {
         let url = Url::parse(base_url).map_err(|err| format!("invalid PUBLIC_BASE_URL: {err}"))?;
@@ -54,7 +79,7 @@ impl Federation {
         };
         let base_url = base_url.trim_end_matches('/').to_string();
         Ok(Self {
-            client: linker::client(&base_url, allow_insecure)?,
+            client: linker::client(&base_url, allow_insecure, Duration::from_secs(15))?,
             base_url,
             domain: domain.to_ascii_lowercase(),
             allow_insecure,
@@ -122,6 +147,12 @@ impl Federation {
         format!("{}/ap/posts/{post_id}", self.base_url)
     }
 
+    /// A private message written here. Not served to anyone: other servers
+    /// receive it whole.
+    pub fn message_object_url(&self, message_id: i64) -> String {
+        format!("{}/ap/messages/{message_id}", self.base_url)
+    }
+
     pub fn comment_object_url(&self, comment_id: i64) -> String {
         format!("{}/ap/comments/{comment_id}", self.base_url)
     }
@@ -142,6 +173,17 @@ impl Federation {
         } else {
             format!("{}{path}", self.base_url)
         }
+    }
+
+    /// Public id of the user who sent the Follow `url`, see `follow_url`.
+    pub fn follow_owner(&self, url: &str) -> Option<i64> {
+        let (public_id, rest) = url.strip_prefix(&self.base_url)?.strip_prefix("/ap/users/")?.split_once('/')?;
+        rest.starts_with("follows/").then(|| public_id.parse().ok()).flatten()
+    }
+
+    /// Id of a Follow sent by a local user to the actor saved as `actor_id`.
+    pub fn follow_url(&self, public_id: i64, actor_id: i64) -> String {
+        format!("{}/follows/{actor_id}/{}", self.actor_url(public_id), sqlx::types::chrono::Utc::now().timestamp_micros())
     }
 
     /// Public id of the local user whose actor address is `url`.

@@ -19,6 +19,7 @@ use crate::{
     },
     handlers::{
         notifier,
+        post::EditTemplate,
         system::{Layout, error_page, render_template},
         user::signed_in_user,
     },
@@ -297,4 +298,134 @@ pub async fn like_comment(State(state): State<AppState>, session: Session, Path(
             error_page(layout, status, message)
         }
     }
+}
+
+/// The comment's post, if `me` can see it, and whether `me` wrote the
+/// comment (only then can they edit it) or may remove it (the post's author,
+/// the community's moderators, the site's staff).
+struct CommentRights {
+    post_id: i64,
+    is_author: bool,
+    can_remove: bool,
+}
+
+async fn comment_rights(pool: &sqlx::PgPool, comment_id: i64, me: &crate::entities::user::User) -> Result<Option<CommentRights>, sqlx::Error> {
+    let Some(owners) = comment::owners(pool, comment_id).await? else {
+        return Ok(None);
+    };
+    let Some(post) = post::find(pool, owners.post_id, Some(me.id)).await? else {
+        return Ok(None);
+    };
+    let is_author = owners.author_id == Some(me.id);
+    let moderates = match &post.community {
+        Some(community) => can_moderate(pool, community.id, me).await,
+        None => me.is_staff(),
+    };
+    Ok(Some(CommentRights {
+        post_id: owners.post_id,
+        is_author,
+        can_remove: is_author || post.is_own || moderates,
+    }))
+}
+
+fn comment_not_found(layout: Layout) -> Response {
+    error_page(layout, StatusCode::NOT_FOUND, "This comment does not exist or isn't yours.")
+}
+
+fn comment_failed(layout: Layout, comment_id: i64, err: sqlx::Error) -> Response {
+    tracing::error!("failed to change comment {}: {}", comment_id, err);
+    error_page(layout, StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong, try again later.")
+}
+
+pub async fn edit_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(comment_id): Path<i64>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let layout = Layout::load(&state, &session).await;
+    let loaded = async {
+        let Some(rights) = comment_rights(&pool, comment_id, &me).await?.filter(|rights| rights.is_author) else {
+            return Ok(None);
+        };
+        Ok(comment::body_of(&pool, comment_id).await?.map(|body| (rights, body)))
+    }
+    .await;
+    let (rights, body) = match loaded {
+        Ok(Some(found)) => found,
+        Ok(None) => return comment_not_found(layout),
+        Err(err) => return comment_failed(layout, comment_id, err),
+    };
+    render_template(&EditTemplate {
+        title: "Edit the comment".to_string(),
+        layout,
+        action: format!("/comments/{comment_id}/edit"),
+        back: format!("/posts/{}#comment-{comment_id}", rights.post_id),
+        body,
+        body_max_chars: BODY_MAX_CHARS,
+        error: query
+            .get("error")
+            .and_then(|code| CommentError::from_code(code))
+            .map(CommentError::message),
+        federated: state.federation.is_some(),
+    })
+}
+
+pub async fn update_comment(
+    State(state): State<AppState>,
+    session: Session,
+    Path(comment_id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let rights = match comment_rights(&pool, comment_id, &me).await {
+        Ok(Some(rights)) if rights.is_author => rights,
+        Ok(_) => return comment_not_found(Layout::load(&state, &session).await),
+        Err(err) => return comment_failed(Layout::load(&state, &session).await, comment_id, err),
+    };
+    let body = match comment::validate_body(form.get("body").map(String::as_str).unwrap_or("")) {
+        Ok(body) => body,
+        Err(err) => {
+            let error = CommentError::from(err);
+            return Redirect::to(&format!("/comments/{comment_id}/edit?error={}", error.code())).into_response();
+        }
+    };
+    if let Err(err) = comment::update_own(&pool, comment_id, me.id, &body).await {
+        return comment_failed(Layout::load(&state, &session).await, comment_id, err);
+    }
+    notifier::comment_updated(&state, &pool, comment_id).await;
+    Redirect::to(&format!("/posts/{}#comment-{comment_id}", rights.post_id)).into_response()
+}
+
+/// Deletes a comment with its replies: by its author, or removed by the
+/// post's author or a moderator.
+pub async fn delete_comment(State(state): State<AppState>, session: Session, Path(comment_id): Path<i64>) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let rights = match comment_rights(&pool, comment_id, &me).await {
+        Ok(Some(rights)) if rights.can_remove => rights,
+        Ok(_) => return comment_not_found(Layout::load(&state, &session).await),
+        Err(err) => return comment_failed(Layout::load(&state, &session).await, comment_id, err),
+    };
+    let deletions = notifier::comment_deleting(&state, &pool, comment_id).await;
+    if let Err(err) = comment::delete(&pool, comment_id).await {
+        return comment_failed(Layout::load(&state, &session).await, comment_id, err);
+    }
+    deletions.send(&state, &pool).await;
+    tracing::info!(
+        "@{} {} comment {}",
+        me.username,
+        if rights.is_author { "deleted" } else { "removed" },
+        comment_id
+    );
+    Redirect::to(&format!("/posts/{}#comments", rights.post_id)).into_response()
 }

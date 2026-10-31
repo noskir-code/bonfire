@@ -26,7 +26,7 @@ use crate::{
         comment,
         community::{self, Community},
         federation::{self as store, Signer},
-        post, user,
+        follow, post, user,
     },
 };
 
@@ -86,7 +86,7 @@ fn server_error(context: &str, err: impl std::fmt::Display) -> Response {
 /// A local user other servers can see, from their public id.
 async fn federated_user(pool: &PgPool, public_id: i64) -> Result<Option<user::User>, Response> {
     match user::find_by_public_id(pool, public_id).await {
-        Ok(user) => Ok(user.filter(|user| user.federation_enabled)),
+        Ok(user) => Ok(user.filter(|user| user.is_federated())),
         Err(err) => Err(server_error("failed to load user", err)),
     }
 }
@@ -123,7 +123,7 @@ async fn webfinger(State(state): State<AppState>, Query(query): Query<HashMap<St
         return not_found();
     };
     let (name, profile, actor) = match (user, community) {
-        (Ok(Some(user)), _) if user.federation_enabled => (
+        (Ok(Some(user)), _) if user.is_federated() => (
             user.username.clone(),
             federation.profile_url(&user.username),
             federation.actor_url(user.public_id),
@@ -214,11 +214,20 @@ async fn community_actor(State(state): State<AppState>, Path(public_id): Path<i6
     let Some((federation, pool)) = enabled(&state) else {
         return not_found();
     };
-    let community = match federated_community(pool, public_id).await {
+    let community = match community::find_by_public_id(pool, public_id).await {
         Ok(Some(community)) => community,
         Ok(None) => return not_found(),
-        Err(response) => return response,
+        Err(err) => return server_error("failed to load community", err),
     };
+    // Private or closed: it left the Fediverse. Only its key stays, so other
+    // servers can check the Undo and Reject it sent when leaving.
+    if !community.is_federated() {
+        return match store::local_keys(pool, Signer::Community(community.id)).await {
+            Ok(Some((_, public_pem, _))) => activity_response(&activities::group_without_details(federation, &community, &public_pem)),
+            Ok(None) => not_found(),
+            Err(err) => server_error("failed to load keys", err),
+        };
+    }
     match linker::keys(pool, Signer::Community(community.id)).await {
         Ok((_, public_pem, _)) => activity_response(&activities::group(federation, &community, &public_pem)),
         Err(err) => server_error("failed to load keys", err),
@@ -282,7 +291,7 @@ async fn community_moderators(State(state): State<AppState>, uri: Uri, Path(publ
     };
     let items: Vec<String> = moderators
         .iter()
-        .filter(|moderator| moderator.user.federation_enabled)
+        .filter(|moderator| moderator.user.is_federated())
         .map(|moderator| federation.actor_url(moderator.user.public_id))
         .collect();
     activity_response(&activities::with_context(json!({
@@ -321,7 +330,7 @@ async fn followers(State(state): State<AppState>, uri: Uri, Path(public_id): Pat
         Ok(None) => return not_found(),
         Err(response) => return response,
     };
-    match store::follower_count(pool, user.id).await {
+    match follow::counts(pool, user.id).await.map(|counts| counts.followers) {
         Ok(total) => activity_response(&activities::counted_collection(
             &format!("{}{}", federation.base_url, uri.path()),
             total,
@@ -330,18 +339,22 @@ async fn followers(State(state): State<AppState>, uri: Uri, Path(public_id): Pat
     }
 }
 
-/// Local users can't follow accounts of other servers yet.
+/// Only the number of accounts followed on other servers.
 async fn following(State(state): State<AppState>, uri: Uri, Path(public_id): Path<i64>) -> Response {
     let Some((federation, pool)) = enabled(&state) else {
         return not_found();
     };
-    match federated_user(pool, public_id).await {
-        Ok(Some(_)) => activity_response(&activities::counted_collection(
+    let user = match federated_user(pool, public_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return not_found(),
+        Err(response) => return response,
+    };
+    match follow::counts(pool, user.id).await.map(|counts| counts.following) {
+        Ok(total) => activity_response(&activities::counted_collection(
             &format!("{}{}", federation.base_url, uri.path()),
-            0,
+            total,
         )),
-        Ok(None) => not_found(),
-        Err(response) => response,
+        Err(err) => server_error("failed to count followed accounts", err),
     }
 }
 
@@ -352,7 +365,7 @@ async fn post_object(State(state): State<AppState>, Path(post_id): Path<i64>) ->
     };
     // Viewed as a visitor: only public posts, and only those written here.
     match post::find(pool, post_id, None).await {
-        Ok(Some(post)) if post.author.local().is_some_and(|author| author.federation_enabled) => {
+        Ok(Some(post)) if post.author.local().is_some_and(|author| author.is_federated()) => {
             match activities::post_note(federation, &post) {
                 Some(note) => activity_response(&activities::with_context(note)),
                 None => not_found(),
@@ -379,7 +392,7 @@ async fn comment_object(State(state): State<AppState>, Path(comment_id): Path<i6
     }
     .await;
     match loaded {
-        Ok(Some((comment, post, in_reply_to))) if comment.author.local().is_some_and(|author| author.federation_enabled) => {
+        Ok(Some((comment, post, in_reply_to))) if comment.author.local().is_some_and(|author| author.is_federated()) => {
             match activities::comment_note(federation, &comment, &post, &in_reply_to) {
                 Some(note) => activity_response(&activities::with_context(note)),
                 None => not_found(),
@@ -398,7 +411,7 @@ pub async fn in_reply_to(
     post: &post::Post,
 ) -> Result<String, sqlx::Error> {
     if let Some(parent_id) = comment.parent_id
-        && let Some((parent, _)) = comment::find_public(pool, parent_id).await?
+        && let Some((parent, _)) = comment::find_any(pool, parent_id).await?
     {
         return Ok(activities::comment_note_id(federation, &parent));
     }
@@ -455,6 +468,12 @@ async fn inbox(State(state): State<AppState>, method: Method, uri: Uri, headers:
     if object_id(&activity["actor"]) != Some(sender.actor_id.as_str()) {
         tracing::info!("refused {} activity: signed by {} for another actor", kind, sender.actor_id);
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // Blocked by the site's staff: accepted, so their server stops sending,
+    // and ignored.
+    if sender.blocked {
+        tracing::debug!("ignored {} activity of blocked {}", kind, sender.actor_id);
+        return StatusCode::ACCEPTED.into_response();
     }
 
     let recipient = recipient.as_ref().zip(local_key.as_ref());

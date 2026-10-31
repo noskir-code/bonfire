@@ -9,11 +9,11 @@
     <section class="box content comments" id="comments">
         <h2>Comments</h2>
         {% for thread in threads %}
-        {% call comments_ui::comment_item(thread.comment, post.id, layout.viewer.is_some()) %}{% endcall %}
+        {% call comments_ui::comment_item(thread.comment, post.id, layout.viewer.is_some(), can_moderate || post.is_own) %}{% endcall %}
         {% if !thread.replies.is_empty() %}
         <div class="comment-replies">
             {% for reply in thread.replies %}
-            {% call comments_ui::comment_item(reply, post.id, layout.viewer.is_some()) %}{% endcall %}
+            {% call comments_ui::comment_item(reply, post.id, layout.viewer.is_some(), can_moderate || post.is_own) %}{% endcall %}
             {% endfor %}
         </div>
         {% endif %}

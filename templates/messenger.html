@@ -1,0 +1,62 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content messenger">
+    <h1>Messenger</h1>
+    <form action="/messenger/new" method="post" class="search-field messenger-new" id="new">
+        <label for="messenger-to" class="visually-hidden">Write to</label>
+        <input id="messenger-to" type="text" name="to" placeholder="{% if fediverse %}Write to a username, or @name@server{% else %}Write to a username{% endif %}" required autocomplete="off" />
+        <button type="submit" class="button primary">Write</button>
+    </form>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    {% if fediverse %}
+    <p class="post-username">Also with people on Mastodon, Pleroma, Hubzilla, Misskey and other Fediverse servers.</p>
+    {% endif %}
+
+    <ul class="conversation-list">
+        {% for conversation in conversations %}
+        <li>
+            <a href="/messenger/{{ conversation.id }}" class="conversation-link{% if conversation.unread %} unread{% endif %}">
+                {% if let Some(url) = conversation.other.photo_url() %}
+                <img src="{{ url }}" alt="" class="nav-avatar" />
+                {% else %}
+                <span class="nav-avatar placeholder" aria-hidden="true">{{ conversation.other.initial() }}</span>
+                {% endif %}
+                <span class="conversation-text">
+                    <span class="conversation-top">
+                        <strong>{{ conversation.other.display_name() }}</strong>
+                        <span class="post-username">{{ conversation.other.handle() }}</span>
+                        <time class="post-meta" datetime="{{ conversation.last_at_iso() }}" data-relative>{{ conversation.last_at_label() }}</time>
+                    </span>
+                    <span class="conversation-excerpt">{% if conversation.last_is_mine %}You: {% endif %}{{ conversation.last_body }}</span>
+                </span>
+                {% if conversation.unread %}<span class="visually-hidden">(unread)</span>{% endif %}
+            </a>
+        </li>
+        {% endfor %}
+        {# Friends without a message yet. #}
+        {% for friend in friends %}
+        <li>
+            <a href="/messenger/with/{{ friend.username }}" class="conversation-link friend">
+                {% if let Some(url) = friend.photo_url %}
+                <img src="{{ url }}" alt="" class="nav-avatar" />
+                {% else %}
+                <span class="nav-avatar placeholder" aria-hidden="true">{{ friend.initial() }}</span>
+                {% endif %}
+                <span class="conversation-text">
+                    <span class="conversation-top">
+                        <strong>{{ friend.display_name() }}</strong>
+                        <span class="post-username">@{{ friend.username }}</span>
+                        <span class="post-meta">Friend</span>
+                    </span>
+                    <span class="conversation-excerpt">No messages yet, say hello</span>
+                </span>
+            </a>
+        </li>
+        {% endfor %}
+        {% if conversations.is_empty() && friends.is_empty() %}
+        <li class="empty">No conversation yet. Write to someone above, or use "Message" on a profile. Your friends appear here too.</li>
+        {% endif %}
+    </ul>
+</section>
+{% endblock %}

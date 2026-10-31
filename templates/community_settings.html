@@ -16,6 +16,9 @@
         <textarea id="description" name="description" rows="4" maxlength="{{ description_max_chars }}">{{ community.description }}</textarea>
         <fieldset class="choices">
             <legend>Who can read the posts</legend>
+            {% if community.is_public() %}
+            <p class="post-username">Making it private removes its followers on other servers, and stops sharing its posts with them.</p>
+            {% endif %}
             {% for visibility in visibilities %}
             <label><input type="radio" name="visibility" value="{{ visibility.as_str() }}"{% if community.visibility == *visibility %} checked{% endif %} /> {{ visibility.label() }}</label>
             {% endfor %}
@@ -59,6 +62,41 @@
         <textarea id="new-rule-body" name="body" rows="2" maxlength="{{ rule_body_max_chars }}" placeholder="Details (optional)"></textarea>
         <button type="submit" class="button">Add rule</button>
     </form>
+
+    {% if !community.is_public() || !requests.is_empty() %}
+    <h2 id="requests">Requests to join</h2>
+    <ul class="community-moderators">
+        {% for user in requests %}
+        <li>
+            <a href="/user/{{ user.username }}">{{ user.display_name() }}</a>
+            <span class="post-username">@{{ user.username }}</span>
+            <form action="/community/{{ community.slug }}/requests/{{ user.id }}/approve" method="post" class="inline">
+                <button type="submit" class="action">Accept</button>
+            </form>
+            <form action="/community/{{ community.slug }}/requests/{{ user.id }}/reject" method="post" class="inline">
+                <button type="submit" class="action danger">Refuse</button>
+            </form>
+        </li>
+        {% else %}
+        <li class="empty">No pending request.</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <h2 id="members">Members</h2>
+    <ul class="community-moderators">
+        {% for user in members %}
+        <li>
+            <a href="/user/{{ user.username }}">{{ user.display_name() }}</a>
+            <span class="post-username">@{{ user.username }}{% if community.owner_user_id == Some(*user.id) %} · owner{% endif %}</span>
+            {% if community.owner_user_id != Some(*user.id) %}
+            <form action="/community/{{ community.slug }}/members/{{ user.id }}/remove" method="post" class="inline" data-confirm="Remove @{{ user.username }} from the community?">
+                <button type="submit" class="action danger">Remove</button>
+            </form>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
 
     <h2>Moderators</h2>
     <ul class="community-moderators">

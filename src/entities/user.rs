@@ -35,7 +35,7 @@ macro_rules! user_columns {
             $prefix, "lastname_public, ", $prefix, "birthday_public, ",
             $prefix, "photo_url, ", $prefix, "background_url, ", $prefix, "created_at, ",
             $prefix, "session_version, ", $prefix, "public_id, ",
-            $prefix, "federation_enabled, ", $prefix, "role"
+            $prefix, "federation_enabled, ", $prefix, "role, ", $prefix, "suspended_at"
         )
     };
 }
@@ -61,6 +61,8 @@ pub const TABLE: Table = Table {
         Column::new("firstname_public", "BOOLEAN").default("TRUE"),
         Column::new("lastname_public", "BOOLEAN").default("TRUE"),
         Column::new("birthday_public", "BOOLEAN").default("TRUE"),
+        // `user`, `moderator` or `admin`, see `Role`. The first account made
+        // is the admin, see `create_account`.
         Column::new("role", "TEXT").default("'user'"),
         // Nullable for accounts created before login existed, they can't sign in.
         Column::new("email", "TEXT").nullable(),
@@ -89,6 +91,8 @@ pub const TABLE: Table = Table {
         Column::new("ap_last_refreshed_at", "TIMESTAMPTZ").default("NOW()"),
         Column::new("federation_enabled", "BOOLEAN").default("TRUE"),
         Column::new("federation_display_name_mode", "TEXT").default("'full_name'"),
+        // Set by the site's staff: can't sign in, posts and profile hidden.
+        Column::new("suspended_at", "TIMESTAMPTZ").nullable(),
         Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
     ],
     indexes: &[
@@ -102,6 +106,46 @@ pub const TABLE: Table = Table {
         Index::new("users_role_idx", "role"),
     ],
 };
+
+/// What a user can do on the site.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Role {
+    #[default]
+    User,
+    /// Handles reports, see `handlers::moderation`.
+    Moderator,
+    /// A moderator who made the site: shown as its creator, and the only
+    /// one naming moderators.
+    Admin,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Moderator => "moderator",
+            Self::Admin => "admin",
+        }
+    }
+
+    /// Unknown values are users: a typo never gives powers.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "moderator" => Self::Moderator,
+            "admin" => Self::Admin,
+            _ => Self::User,
+        }
+    }
+
+    /// Shown next to the name, `None` for users.
+    pub fn badge(self) -> Option<&'static str> {
+        match self {
+            Self::User => None,
+            Self::Moderator => Some("Moderator"),
+            Self::Admin => Some("Creator"),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct User {
@@ -128,8 +172,9 @@ pub struct User {
     pub public_id: i64,
     /// Whether other Fediverse servers can find and follow the account.
     pub federation_enabled: bool,
-    /// `user`, or `moderator` / `admin` for the site's staff.
-    pub role: String,
+    pub role: Role,
+    /// Suspended by the staff, see `set_suspended`.
+    pub suspended_at: Option<DateTime<Utc>>,
 }
 
 impl User {
@@ -152,7 +197,8 @@ impl User {
             session_version: row.try_get("session_version")?,
             public_id: row.try_get("public_id")?,
             federation_enabled: row.try_get("federation_enabled")?,
-            role: row.try_get("role")?,
+            role: Role::parse(&row.try_get::<String, _>("role")?),
+            suspended_at: row.try_get("suspended_at")?,
         })
     }
 
@@ -193,8 +239,23 @@ impl User {
     }
 
     /// Site moderators and admins: they can ban or delete any community.
+    /// Moderators and the admin: they handle reports.
     pub fn is_staff(&self) -> bool {
-        matches!(self.role.as_str(), "moderator" | "admin")
+        matches!(self.role, Role::Moderator | Role::Admin)
+    }
+
+    pub fn is_admin(&self) -> bool {
+        self.role == Role::Admin
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended_at.is_some()
+    }
+
+    /// Other Fediverse servers can see and reach the account: on the
+    /// Fediverse, and not suspended.
+    pub fn is_federated(&self) -> bool {
+        self.federation_enabled && !self.is_suspended()
     }
 
     pub fn image_url(&self, image: ProfileImage) -> Option<&str> {
@@ -323,10 +384,11 @@ pub enum CreateAccountError {
 }
 
 pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<User, CreateAccountError> {
-    // Not a community's name either: they share the Fediverse names.
+    // Not a community's name either: they share the Fediverse names. The
+    // first account of the site is its admin, whoever installed it.
     let result = sqlx::query(concat!(
-        "INSERT INTO users (username, email, password_hash, firstname, lastname, birthday)
-         SELECT $1, $2, $3, $4, $5, $6
+        "INSERT INTO users (username, email, password_hash, firstname, lastname, birthday, role)
+         SELECT $1, $2, $3, $4, $5, $6, CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'user' ELSE 'admin' END
          WHERE NOT EXISTS (SELECT 1 FROM communities WHERE LOWER(slug) = LOWER($1))
          RETURNING ",
         user_columns!()
@@ -406,6 +468,90 @@ pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<Us
     .as_ref()
     .map(User::from_row)
     .transpose()
+}
+
+/// Gives a role to a user.
+pub async fn set_role(pool: &PgPool, id: i32, role: Role) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET role = $2 WHERE id = $1")
+        .bind(id)
+        .bind(role.as_str())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The site's staff: the admin first, then the moderators by name.
+pub async fn staff(pool: &PgPool) -> Result<Vec<User>, sqlx::Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users WHERE role IN ('admin', 'moderator')
+         ORDER BY role = 'admin' DESC, LOWER(username)"
+    ))
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(User::from_row)
+    .collect()
+}
+
+/// Suspends or reinstates an account. A suspension also signs it out
+/// everywhere (`session_version`).
+pub async fn set_suspended(pool: &PgPool, id: i32, suspended: bool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE users SET suspended_at = CASE WHEN $2 THEN NOW() END,
+                          session_version = session_version + CASE WHEN $2 THEN 1 ELSE 0 END
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(suspended)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Users shown at once in search results.
+pub const SEARCH_SIZE: i64 = 30;
+
+/// `%` and `_` typed by the user are searched as is in a LIKE pattern.
+pub fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+/// Users whose username, display name, or public first or last name contains
+/// `search`, ignoring case. Most relevant first: the exact username, then
+/// names starting with it, then names with a word starting with it.
+pub async fn search(pool: &PgPool, search: &str, limit: i64) -> Result<Vec<User>, sqlx::Error> {
+    let search = search.trim().trim_start_matches('@').to_lowercase();
+    let escaped = escape_like(&search);
+    sqlx::query(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users,
+              LATERAL (SELECT LOWER(displayname) AS display,
+                              CASE WHEN firstname_public THEN LOWER(firstname) ELSE '' END AS first,
+                              CASE WHEN lastname_public THEN LOWER(lastname) ELSE '' END AS last) n
+         WHERE suspended_at IS NULL
+           AND (LOWER(username) LIKE '%' || $1 || '%' OR n.display LIKE '%' || $1 || '%'
+            OR n.first LIKE '%' || $1 || '%' OR n.last LIKE '%' || $1 || '%')
+         ORDER BY CASE
+                    WHEN LOWER(username) = $2 THEN 0
+                    WHEN LOWER(username) LIKE $1 || '%' THEN 1
+                    WHEN n.display LIKE $1 || '%' OR n.first LIKE $1 || '%' OR n.last LIKE $1 || '%' THEN 2
+                    WHEN n.display LIKE '% ' || $1 || '%' THEN 3
+                    ELSE 4
+                  END,
+                  LENGTH(username), LOWER(username)
+         LIMIT $3"
+    ))
+    .bind(escaped)
+    .bind(search)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(User::from_row)
+    .collect()
 }
 
 pub async fn update_names(
@@ -506,4 +652,20 @@ fn is_unique_violation(err: &sqlx::Error) -> bool {
     err.as_database_error()
         .and_then(|db_err| db_err.code())
         .is_some_and(|code| code == "23505")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roles_are_read_safely() {
+        assert_eq!(Role::parse("admin"), Role::Admin);
+        assert_eq!(Role::parse("moderator"), Role::Moderator);
+        // A typo or an old value never gives powers.
+        assert_eq!(Role::parse("Admin"), Role::User);
+        assert_eq!(Role::parse("superuser"), Role::User);
+        assert_eq!(Role::Admin.badge(), Some("Creator"));
+        assert_eq!(Role::User.badge(), None);
+    }
 }

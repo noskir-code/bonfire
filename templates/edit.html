@@ -1,0 +1,19 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content composer edit-form">
+    <h1>{{ title }}</h1>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    {% if federated %}
+    <p class="post-username">Servers of the Fediverse that have it are sent the new text.</p>
+    {% endif %}
+    <form action="{{ action }}" method="post">
+        <label for="edit-body" class="visually-hidden">Text</label>
+        <textarea id="edit-body" name="body" maxlength="{{ body_max_chars }}" rows="8" required>{{ body }}</textarea>
+        <div class="flex center space-between">
+            <a href="{{ back }}" class="action">Cancel</a>
+            <button type="submit" class="button">Save</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

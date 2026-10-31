@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% import "macros/post.html" as posts_ui %}
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% import "macros/account.html" as accounts_ui %}
 {% block head %}{% if let Some(url) = activitypub_url %}
 <link rel="alternate" type="application/activity+json" href="{{ url }}" />
 {% endif %}{% endblock %}
@@ -16,11 +16,60 @@
         <div class="avatar placeholder" aria-hidden="true">{{ user.initial() }}</div>
         {% endif %}
         <div>
-            <h1 class="profile-name">{{ user.display_name() }}</h1>
-            <p class="profile-username">@{{ user.username }}</p>
+            <div class="flex center">
+                <h1 class="profile-name">{{ user.display_name() }}</h1>
+                {% if let Some(badge) = user.role.badge() %}<span class="role-badge {{ user.role.as_str() }}" title="{% if user.is_admin() %}Created this site{% else %}Moderates this site{% endif %}">{{ badge }}</span>{% endif %}
+                <p class="profile-username">@{{ user.username }}</p>
+            </div>
+            <p class="profile-counts">
+                <a href="/user/{{ user.username }}?tab=followers"><strong>{{ counts.followers }}</strong> follower{% if counts.followers != 1 %}s{% endif %}</a>
+                <a href="/user/{{ user.username }}?tab=following"><strong>{{ counts.following }}</strong> following</a>
+                <a href="/user/{{ user.username }}?tab=friends"><strong>{{ friend_count }}</strong> friend{% if friend_count != 1 %}s{% endif %}</a>
+            </p>
         </div>
         {% if is_own_profile %}
         <a href="/settings" class="button profile-edit-link">Edit profile</a>
+        {% else if let Some(follows) = viewer_follows %}
+        <div class="profile-actions profile-edit-link">
+            {% if let Some(friendship) = friendship %}
+            {% match friendship %}
+            {% when FriendState::None %}
+            <form action="/user/{{ user.username }}/friend" method="post">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button primary">Add friend</button>
+            </form>
+            {% when FriendState::RequestReceived %}
+            <form action="/user/{{ user.username }}/friend" method="post">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button primary">Accept friend</button>
+            </form>
+            <form action="/user/{{ user.username }}/unfriend" method="post">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button">Decline</button>
+            </form>
+            {% when FriendState::RequestSent %}
+            <form action="/user/{{ user.username }}/unfriend" method="post">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button" title="Waiting for @{{ user.username }} to accept">Cancel request</button>
+            </form>
+            {% when FriendState::Friends %}
+            <form action="/user/{{ user.username }}/unfriend" method="post" data-confirm="Remove @{{ user.username }} from your friends?" data-confirm-label="Remove friend">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button">Friends ✓</button>
+            </form>
+            {% endmatch %}
+            {% endif %}
+            <form action="/user/{{ user.username }}/{% if follows %}unfollow{% else %}follow{% endif %}" method="post">
+                <input type="hidden" name="return" value="/user/{{ user.username }}" />
+                <button type="submit" class="button">{% if follows %}Unfollow{% else %}Follow{% endif %}</button>
+            </form>
+            <form action="/messenger/with/{{ user.username }}" method="post">
+                <button type="submit" class="button">Message</button>
+            </form>
+            <a href="/report?user={{ user.username }}" class="button report-button" title="Report @{{ user.username }} to the moderators">Report</a>
+        </div>
+        {% else %}
+        <a href="/login" class="button profile-edit-link">Login to add as friend or follow</a>
         {% endif %}
     </div>
     <nav class="profile-tabs" aria-label="Profile sections">
@@ -47,7 +96,7 @@
             <span class="post-username">On @{{ comment.post_author }}'s post</span>
             <span class="comment-excerpt">{{ comment.post_excerpt }}{% if comment.post_truncated %}…{% endif %}</span>
         </a>
-        <p class="post-body">{{ comment.body }}</p>
+        <p class="post-body">{{ comment.body_html()|safe }}</p>
         <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
     </article>
     {% else %}
@@ -56,10 +105,68 @@
     </p>
     {% endfor %}
     {% when ProfileTab::Friends %}
+    {% if !requests_received.is_empty() %}
+    <h2>Friend requests</h2>
+    <ul class="account-list">
+        {% for requester in requests_received %}
+        <li>
+            {% call accounts_ui::user_identity(requester) %}{% endcall %}
+            <form action="/user/{{ requester.username }}/friend" method="post" class="inline">
+                <input type="hidden" name="return" value="/user/{{ user.username }}?tab=friends" />
+                <button type="submit" class="action">Accept</button>
+            </form>
+            <form action="/user/{{ requester.username }}/unfriend" method="post" class="inline">
+                <input type="hidden" name="return" value="/user/{{ user.username }}?tab=friends" />
+                <button type="submit" class="action danger">Decline</button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
     <h2>Friends</h2>
-    <p class="empty">
-        {% if is_own_profile %}You don't have friends yet.{% else %}@{{ user.username }} doesn't have friends yet.{% endif %}
-    </p>
+    <ul class="account-list">
+        {% for friend in friends %}
+        <li>{% call accounts_ui::user_identity(friend) %}{% endcall %}</li>
+        {% else %}
+        <li class="empty">{% if is_own_profile %}You don't have friends yet.{% else %}@{{ user.username }} doesn't have friends yet.{% endif %}</li>
+        {% endfor %}
+    </ul>
+    {% if !requests_sent.is_empty() %}
+    <h2>Requests you sent</h2>
+    <ul class="account-list">
+        {% for asked in requests_sent %}
+        <li>
+            {% call accounts_ui::user_identity(asked) %}{% endcall %}
+            <span class="post-username">Waiting</span>
+            <form action="/user/{{ asked.username }}/unfriend" method="post" class="inline">
+                <input type="hidden" name="return" value="/user/{{ user.username }}?tab=friends" />
+                <button type="submit" class="action">Cancel</button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% when ProfileTab::Followers %}
+    <h2>Followers</h2>
+    <ul class="account-list">
+        {% for listed in accounts %}
+        <li>{% call accounts_ui::author_identity(listed.account) %}{% endcall %}</li>
+        {% else %}
+        <li class="empty">{% if is_own_profile %}Nobody follows you yet.{% else %}Nobody follows @{{ user.username }} yet.{% endif %}</li>
+        {% endfor %}
+    </ul>
+    {% when ProfileTab::Following %}
+    <h2>Following</h2>
+    <ul class="account-list">
+        {% for listed in accounts %}
+        <li>
+            {% call accounts_ui::author_identity(listed.account) %}{% endcall %}
+            {% if !listed.accepted %}<span class="post-username">Waiting for their server</span>{% endif %}
+        </li>
+        {% else %}
+        <li class="empty">{% if is_own_profile %}You don't follow anyone yet.{% else %}@{{ user.username }} doesn't follow anyone yet.{% endif %}</li>
+        {% endfor %}
+    </ul>
     {% when ProfileTab::About %}
     <h2>About me</h2>
     {% if !user.bio.is_empty() %}

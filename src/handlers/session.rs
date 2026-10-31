@@ -43,7 +43,7 @@ pub async fn signed_in(pool: &PgPool, session: &Session) -> Result<Option<User>,
         .flatten();
 
     match user::find_by_id(pool, user_id).await? {
-        Some(user) if version == Some(user.session_version) => Ok(Some(user)),
+        Some(user) if version == Some(user.session_version) && !user.is_suspended() => Ok(Some(user)),
         _ => {
             if let Err(err) = sign_out(session).await {
                 tracing::warn!("failed to sign out outdated session: {}", err);

@@ -1,6 +1,7 @@
-//! Notifications shown to a user: likes, comments and shares of their posts,
-//! replies to their comments, and new followers from the Fediverse. Never
-//! about the user's own actions.
+//! Notifications shown to a user: likes, comments and shares of their posts
+//! (from here or other servers), replies to their comments, new followers
+//! from the Fediverse, and requests to join the private communities they
+//! moderate. Never about the user's own actions.
 //!
 //! Every change also sends a Postgres notification on `CHANNEL` saying what
 //! changed (see `Change`), so the user's open pages update at once (see
@@ -13,6 +14,8 @@ use sqlx::{
 };
 
 use crate::entities::{
+    federation::{Reacted, RemoteReaction},
+    media,
     post::{self, Reaction},
     schema::{Column, Index, Table},
     user::{User, user_columns},
@@ -46,6 +49,9 @@ pub const TABLE: Table = Table {
         Column::new("comment_id", "BIGINT")
             .nullable()
             .references("comments(id) ON DELETE CASCADE"),
+        Column::new("community_id", "BIGINT")
+            .nullable()
+            .references("communities(id) ON DELETE CASCADE"),
         Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
         Column::new("read_at", "TIMESTAMPTZ").nullable(),
     ],
@@ -67,10 +73,32 @@ pub enum Kind {
     Share,
     /// An account of another server followed the user.
     Follow,
+    /// A user of this server followed the user.
+    UserFollow,
+    /// A user asked to be the user's friend.
+    FriendRequest,
+    /// A user accepted the user's friend request.
+    FriendAccepted,
+    /// Someone asked to join a private community the user moderates.
+    JoinRequest,
+    /// A moderator accepted the user in a private community.
+    JoinApproved,
 }
 
 impl Kind {
-    const ALL: [Self; 6] = [Self::Like, Self::Comment, Self::Reply, Self::CommentLike, Self::Share, Self::Follow];
+    const ALL: [Self; 11] = [
+        Self::Like,
+        Self::Comment,
+        Self::Reply,
+        Self::CommentLike,
+        Self::Share,
+        Self::Follow,
+        Self::UserFollow,
+        Self::FriendRequest,
+        Self::FriendAccepted,
+        Self::JoinRequest,
+        Self::JoinApproved,
+    ];
 
     /// Stored in the database.
     fn as_str(self) -> &'static str {
@@ -81,6 +109,11 @@ impl Kind {
             Self::CommentLike => "comment_like",
             Self::Share => "share",
             Self::Follow => "follow",
+            Self::UserFollow => "user_follow",
+            Self::FriendRequest => "friend_request",
+            Self::FriendAccepted => "friend_accepted",
+            Self::JoinRequest => "join_request",
+            Self::JoinApproved => "join_approved",
         }
     }
 
@@ -97,6 +130,11 @@ impl Kind {
             Self::CommentLike => "liked your comment",
             Self::Share => "shared your post",
             Self::Follow => "followed you from the Fediverse",
+            Self::UserFollow => "followed you",
+            Self::FriendRequest => "wants to be your friend",
+            Self::FriendAccepted => "accepted your friend request",
+            Self::JoinRequest => "asked to join",
+            Self::JoinApproved => "accepted you in",
         }
     }
 
@@ -110,10 +148,18 @@ impl Kind {
 
 /// An account of another server, as shown in a notification.
 pub struct RemoteAccount {
-    /// Their address, opening their profile on their server.
+    /// Their page here, `/remote/{id}`.
     pub url: String,
     /// Like `@alice@mastodon.social`.
     pub handle: String,
+    /// Through the media proxy.
+    pub photo_url: Option<String>,
+}
+
+/// The community of a notification about joining it.
+pub struct NotifiedCommunity {
+    pub slug: String,
+    pub name: String,
 }
 
 pub struct Notification {
@@ -129,6 +175,7 @@ pub struct Notification {
     pub post_truncated: bool,
     pub comment_id: Option<i64>,
     pub comment_excerpt: Option<String>,
+    pub community: Option<NotifiedCommunity>,
 }
 
 impl Notification {
@@ -145,11 +192,23 @@ impl Notification {
         };
         let remote_actor = row
             .try_get::<Option<String>, _>("remote_url")?
-            .map(|url| {
+            .map(|actor_url| {
                 let username: String = row.try_get("remote_username")?;
-                Ok::<_, sqlx::Error>(RemoteAccount { handle: handle(&username, &url), url })
+                let id: i64 = row.try_get("remote_id")?;
+                Ok::<_, sqlx::Error>(RemoteAccount {
+                    handle: handle(&username, &actor_url),
+                    url: format!("/remote/{id}"),
+                    photo_url: row.try_get::<Option<String>, _>("remote_icon")?.as_deref().map(media::proxy_url),
+                })
             })
             .transpose()?;
+        let community = match row.try_get::<Option<String>, _>("community_slug")? {
+            Some(slug) => Some(NotifiedCommunity {
+                slug,
+                name: row.try_get("community_name")?,
+            }),
+            None => None,
+        };
         Ok(Some(Self {
             id: row.try_get("notification_id")?,
             kind,
@@ -162,11 +221,19 @@ impl Notification {
             post_truncated: row.try_get::<Option<bool>, _>("post_truncated")?.unwrap_or(false),
             comment_id: row.try_get("comment_id")?,
             comment_excerpt: row.try_get("comment_excerpt")?,
+            community,
         }))
     }
 
-    /// Where the notification leads: the comment, the post, or the account.
+    /// Where the notification leads: the comment, the post, the community,
+    /// or the account.
     pub fn link(&self) -> String {
+        if let Some(community) = &self.community {
+            return match self.kind {
+                Kind::JoinRequest => format!("/community/{}/settings#requests", community.slug),
+                _ => format!("/community/{}", community.slug),
+            };
+        }
         match (self.post_id, self.comment_id) {
             (Some(post_id), Some(comment_id)) => format!("/posts/{post_id}#comment-{comment_id}"),
             (Some(post_id), None) => format!("/posts/{post_id}"),
@@ -175,6 +242,15 @@ impl Notification {
                 (None, Some(remote)) => remote.url.clone(),
                 (None, None) => "/notifications".to_string(),
             },
+        }
+    }
+
+    /// The avatar of who did it, here or through the media proxy.
+    pub fn actor_photo(&self) -> Option<String> {
+        match (&self.actor, &self.remote_actor) {
+            (Some(actor), _) => actor.photo_url.clone(),
+            (None, Some(remote)) => remote.photo_url.clone(),
+            (None, None) => None,
         }
     }
 
@@ -218,6 +294,9 @@ pub enum Change {
     Read(i64),
     AllRemoved,
     AllRead,
+    /// A message was sent, read or deleted in this conversation: the open
+    /// pages refresh it and the unread count of the messenger.
+    Message(i64),
 }
 
 impl Change {
@@ -230,6 +309,7 @@ impl Change {
             ("read", "all") => Self::AllRead,
             ("added", id) => Self::Added(id.parse().ok()?),
             ("removed", id) => Self::Removed(id.parse().ok()?),
+            ("message", id) => Self::Message(id.parse().ok()?),
             ("read", id) => Self::Read(id.parse().ok()?),
             _ => return None,
         };
@@ -394,6 +474,195 @@ pub async fn remote_comment_added(
     Ok(())
 }
 
+fn remote_kind(kind: RemoteReaction, target: Reacted) -> Kind {
+    match (kind, target) {
+        (RemoteReaction::Like, Reacted::Post(_)) => Kind::Like,
+        (RemoteReaction::Like, Reacted::Comment(_)) => Kind::CommentLike,
+        (RemoteReaction::Share, _) => Kind::Share,
+    }
+}
+
+/// A like or share from another server notifies the local author of the post
+/// or comment. `remote_actor_id` is a row of `federation_actors`.
+pub async fn remote_reaction_added(pool: &PgPool, kind: RemoteReaction, target: Reacted, remote_actor_id: i64) -> Result<(), sqlx::Error> {
+    let query = match target {
+        Reacted::Post(_) => signalled!(
+            "added",
+            "INSERT INTO notifications (user_id, kind, remote_actor_id, post_id)
+             SELECT user_id, $1, $2, id FROM posts WHERE id = $3 AND user_id IS NOT NULL"
+        ),
+        Reacted::Comment(_) => signalled!(
+            "added",
+            "INSERT INTO notifications (user_id, kind, remote_actor_id, post_id, comment_id)
+             SELECT user_id, $1, $2, post_id, id FROM comments WHERE id = $3 AND user_id IS NOT NULL"
+        ),
+    };
+    let (Reacted::Post(id) | Reacted::Comment(id)) = target;
+    sqlx::query(query)
+        .bind(remote_kind(kind, target).as_str())
+        .bind(remote_actor_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Undone on the other server: the notification goes too.
+pub async fn remote_reaction_removed(pool: &PgPool, kind: RemoteReaction, target: Reacted, remote_actor_id: i64) -> Result<(), sqlx::Error> {
+    let query = match target {
+        Reacted::Post(_) => signalled!(
+            "removed",
+            "DELETE FROM notifications WHERE kind = $1 AND remote_actor_id = $2 AND post_id = $3 AND comment_id IS NULL"
+        ),
+        Reacted::Comment(_) => signalled!(
+            "removed",
+            "DELETE FROM notifications WHERE kind = $1 AND remote_actor_id = $2 AND comment_id = $3"
+        ),
+    };
+    let (Reacted::Post(id) | Reacted::Comment(id)) = target;
+    sqlx::query(query)
+        .bind(remote_kind(kind, target).as_str())
+        .bind(remote_actor_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Tells the moderators of a private community that `user_id` asks to join.
+pub async fn join_requested(pool: &PgPool, community_id: i64, manager_ids: &[i32], user_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "added",
+        "INSERT INTO notifications (user_id, kind, actor_user_id, community_id)
+         SELECT manager, $1, $2, $3 FROM UNNEST($4::integer[]) AS manager WHERE manager <> $2"
+    ))
+    .bind(Kind::JoinRequest.as_str())
+    .bind(user_id)
+    .bind(community_id)
+    .bind(manager_ids)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The request is answered (or withdrawn): its notifications go.
+pub async fn join_request_answered(pool: &PgPool, community_id: i64, user_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "removed",
+        "DELETE FROM notifications WHERE kind = $1 AND actor_user_id = $2 AND community_id = $3"
+    ))
+    .bind(Kind::JoinRequest.as_str())
+    .bind(user_id)
+    .bind(community_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Tells `user_id` that `moderator_id` accepted them in the community.
+pub async fn join_approved(pool: &PgPool, community_id: i64, user_id: i32, moderator_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "added",
+        "INSERT INTO notifications (user_id, kind, actor_user_id, community_id) VALUES ($1, $2, $3, $4)"
+    ))
+    .bind(user_id)
+    .bind(Kind::JoinApproved.as_str())
+    .bind(moderator_id)
+    .bind(community_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `follower_id` followed `user_id`.
+pub async fn user_followed(pool: &PgPool, user_id: i32, follower_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "added",
+        "INSERT INTO notifications (user_id, kind, actor_user_id) VALUES ($1, $2, $3)"
+    ))
+    .bind(user_id)
+    .bind(Kind::UserFollow.as_str())
+    .bind(follower_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// An unfollow removes the notification of the follow, read or not.
+pub async fn user_unfollowed(pool: &PgPool, user_id: i32, follower_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "removed",
+        "DELETE FROM notifications WHERE user_id = $1 AND kind = $2 AND actor_user_id = $3"
+    ))
+    .bind(user_id)
+    .bind(Kind::UserFollow.as_str())
+    .bind(follower_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Tells `user_id` about a friend request of `actor_id`, or its acceptance.
+pub async fn friend_changed(pool: &PgPool, user_id: i32, actor_id: i32, accepted: bool) -> Result<(), sqlx::Error> {
+    let kind = if accepted { Kind::FriendAccepted } else { Kind::FriendRequest };
+    sqlx::query(signalled!(
+        "added",
+        "INSERT INTO notifications (user_id, kind, actor_user_id) VALUES ($1, $2, $3)"
+    ))
+    .bind(user_id)
+    .bind(kind.as_str())
+    .bind(actor_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// A request answered, cancelled, or a friendship ended: the notifications
+/// between the two users about it go.
+pub async fn friend_removed(pool: &PgPool, first_id: i32, second_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "removed",
+        "DELETE FROM notifications WHERE kind IN ($1, $2)
+           AND ((user_id = $3 AND actor_user_id = $4) OR (user_id = $4 AND actor_user_id = $3))"
+    ))
+    .bind(Kind::FriendRequest.as_str())
+    .bind(Kind::FriendAccepted.as_str())
+    .bind(first_id)
+    .bind(second_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The request was accepted: its notification goes, the acceptance stays.
+pub async fn friend_request_answered(pool: &PgPool, user_id: i32, requester_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(signalled!(
+        "removed",
+        "DELETE FROM notifications WHERE kind = $1 AND user_id = $2 AND actor_user_id = $3"
+    ))
+    .bind(Kind::FriendRequest.as_str())
+    .bind(user_id)
+    .bind(requester_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Tells the pages of `user_ids` that the conversation changed, see
+/// `Change::Message`.
+pub async fn signal_message(pool: &PgPool, user_ids: &[i32], conversation_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        // Same name as `CHANNEL`, see the tests below.
+        "SELECT pg_notify('bonfire_notifications', person::text || ':message:' || $2::text)
+         FROM UNNEST($1::integer[]) AS person",
+    )
+    .bind(user_ids)
+    .bind(conversation_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// `remote_actor_id` is a row of `federation_actors`.
 pub async fn followed(pool: &PgPool, user_id: i32, remote_actor_id: i64) -> Result<(), sqlx::Error> {
     sqlx::query(signalled!(
@@ -416,7 +685,8 @@ macro_rules! notification_select {
         concat!(
             "SELECT n.id AS notification_id, n.kind, n.created_at AS notified_at, n.read_at,
                     n.post_id, n.comment_id,
-                    a.actor_id AS remote_url, a.username AS remote_username,
+                    a.id AS remote_id, a.actor_id AS remote_url, a.username AS remote_username,
+                    a.icon_url AS remote_icon, cm.slug AS community_slug, cm.name AS community_name,
                     LEFT(p.body, $2) AS post_excerpt, LENGTH(p.body) > $2 AS post_truncated,
                     LEFT(c.body, $2) AS comment_excerpt, ",
             user_columns!("u."),
@@ -425,6 +695,7 @@ macro_rules! notification_select {
               LEFT JOIN federation_actors a ON a.id = n.remote_actor_id
               LEFT JOIN posts p ON p.id = n.post_id
               LEFT JOIN comments c ON c.id = n.comment_id
+              LEFT JOIN communities cm ON cm.id = n.community_id
              WHERE n.user_id = $1
                AND ($4::bigint IS NULL OR n.id = $4)
                AND ($5::bigint IS NULL OR n.id < $5)
@@ -546,6 +817,7 @@ mod tests {
         assert_eq!(Change::parse("12:removed:345"), Some((12, Change::Removed(345))));
         assert_eq!(Change::parse("12:read:all"), Some((12, Change::AllRead)));
         assert_eq!(Change::parse("12:removed:all"), Some((12, Change::AllRemoved)));
+        assert_eq!(Change::parse("12:message:7"), Some((12, Change::Message(7))));
         assert_eq!(Change::parse("12:added:all"), None);
         assert_eq!(Change::parse("12"), None);
         assert_eq!(Change::parse("x:read:1"), None);

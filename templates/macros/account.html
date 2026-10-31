@@ -1,0 +1,64 @@
+{# An account of another server with its follow button. `account` is
+   `handlers::fediverse::Account`, `return_to` where the button comes back. #}
+{% macro follow_button(account, return_to) %}
+{% if let Some(accepted) = account.following %}
+<form action="/fediverse/unfollow" method="post">
+    <input type="hidden" name="actor" value="{{ account.author.id }}" />
+    <input type="hidden" name="return" value="{{ return_to }}" />
+    <button type="submit" class="button">{% if accepted %}Unfollow{% else %}Cancel request{% endif %}</button>
+</form>
+{% if !accepted %}<p class="post-username">Waiting for their server to accept.</p>{% endif %}
+{% else %}
+<form action="/fediverse/follow" method="post">
+    <input type="hidden" name="actor" value="{{ account.author.id }}" />
+    <input type="hidden" name="return" value="{{ return_to }}" />
+    <button type="submit" class="button">Follow</button>
+</form>
+{% endif %}
+{% endmacro %}
+
+{# Avatar, name and handle linking to the account's page here. #}
+{% macro identity(author) %}
+<a href="{{ author.page_url() }}" class="post-author">
+    {% if let Some(url) = author.photo_url() %}
+    <img src="{{ url }}" alt="" class="nav-avatar" />
+    {% else %}
+    <span class="nav-avatar placeholder" aria-hidden="true">{{ author.initial() }}</span>
+    {% endif %}
+    <span>
+        <strong>{{ author.display_name() }}</strong>
+        <span class="post-username">{{ author.handle() }}</span>
+    </span>
+</a>
+{% endmacro %}
+
+{# Avatar, name and handle of a local user or a remote account (`Author`),
+   linking to their page here. #}
+{% macro author_identity(author) %}
+<a href="{{ author.profile_url() }}" class="post-author">
+    {% if let Some(url) = author.photo_url() %}
+    <img src="{{ url }}" alt="" class="nav-avatar" />
+    {% else %}
+    <span class="nav-avatar placeholder" aria-hidden="true">{{ author.initial() }}</span>
+    {% endif %}
+    <span>
+        <strong>{{ author.display_name() }}</strong>
+        <span class="post-username">{{ author.handle() }}</span>
+    </span>
+</a>
+{% endmacro %}
+
+{# Avatar, name and @username of a local user, linking to their profile. #}
+{% macro user_identity(user) %}
+<a href="/user/{{ user.username }}" class="post-author">
+    {% if let Some(url) = user.photo_url %}
+    <img src="{{ url }}" alt="" class="nav-avatar" />
+    {% else %}
+    <span class="nav-avatar placeholder" aria-hidden="true">{{ user.initial() }}</span>
+    {% endif %}
+    <span>
+        <strong>{{ user.display_name() }}</strong>
+        <span class="post-username">@{{ user.username }}</span>
+    </span>
+</a>
+{% endmacro %}

@@ -19,6 +19,12 @@ pub struct Layout {
     pub viewer: Option<User>,
     /// Shown next to "Notifications" in the menu, 0 for visitors.
     pub unread_notifications: i64,
+    /// Conversations with an unread message, next to "Messenger".
+    pub unread_messages: i64,
+    /// Open reports, next to "Moderation": the site's staff only.
+    pub open_reports: i64,
+    /// Kept in the search bar of every page, set by the search page.
+    pub search: String,
 }
 
 impl Layout {
@@ -33,6 +39,20 @@ impl Layout {
                 return Self::default();
             }
         };
+        let unread_messages = match &viewer {
+            Some(viewer) => crate::entities::message::unread_count(pool, viewer.id).await.unwrap_or_else(|err| {
+                tracing::warn!("failed to count unread messages: {}", err);
+                0
+            }),
+            None => 0,
+        };
+        let open_reports = match &viewer {
+            Some(viewer) if viewer.is_staff() => crate::entities::report::open_count(pool).await.unwrap_or_else(|err| {
+                tracing::warn!("failed to count reports: {}", err);
+                0
+            }),
+            _ => 0,
+        };
         let unread_notifications = match &viewer {
             Some(viewer) => notification::unread_count(pool, viewer.id).await.unwrap_or_else(|err| {
                 tracing::warn!("failed to count notifications: {}", err);
@@ -40,7 +60,20 @@ impl Layout {
             }),
             None => 0,
         };
-        Self { viewer, unread_notifications }
+        Self {
+            viewer,
+            unread_notifications,
+            unread_messages,
+            open_reports,
+            search: String::new(),
+        }
+    }
+
+    pub fn unread_messages_label(&self) -> String {
+        match self.unread_messages {
+            count if count > 99 => "99+".to_string(),
+            count => count.to_string(),
+        }
     }
 
     /// The count as shown in the menu: "99+" past 99.

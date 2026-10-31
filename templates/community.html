@@ -3,7 +3,7 @@
 <link rel="alternate" type="application/activity+json" href="{{ url }}" />
 {% endif %}{% endblock %}
 {% block content %}
-<section class="box content community-header">
+<section class="box content">
     {% if community.is_banned() %}
     <p class="error">This community is closed by the site's moderators. Only they can see it.</p>
     {% endif %}
@@ -36,9 +36,18 @@
             <button type="submit" class="button">Leave</button>
         </form>
         {% endif %}
+        {% else if membership.has_requested %}
+        <form action="/community/{{ community.slug }}/request/cancel" method="post">
+            <button type="submit" class="button" title="Waiting for a moderator">Cancel request</button>
+        </form>
+        <span class="post-username community-waiting">Request sent, waiting for a moderator.</span>
+        {% else if community.is_public() %}
+        <form action="/community/{{ community.slug }}/join" method="post">
+            <button type="submit" class="button primary">Join</button>
+        </form>
         {% else %}
         <form action="/community/{{ community.slug }}/join" method="post">
-            <button type="submit" class="button">Join</button>
+            <button type="submit" class="button primary">Ask to join</button>
         </form>
         {% endif %}
         {% if !membership.can_manage() %}
@@ -57,12 +66,12 @@
         </form>
         {% endif %}
         {% else %}
-        <a href="/login" class="button">Login to join</a>
+        <a href="/login" class="button primary">Login to {% if community.is_public() %}join{% else %}ask to join{% endif %}</a>
         {% endif %}
     </div>
 </section>
 
-<div class="community-layout">
+<div class="community-layout content">
     <div class="community-main">
         {% if membership.is_member && !community.is_banned() %}
         <section class="box content composer" id="composer">
@@ -90,7 +99,7 @@
 
         <div class="flex center vertical full-width posts">
             {% if posts_hidden %}
-            <p class="box content empty">This community is private: join it to read its posts.</p>
+            <p class="box content empty">This community is private: only members approved by its moderators can read its posts.</p>
             {% else %}
             {% call posts_ui::post_list(posts, "No post yet.", layout.viewer.is_some(), return_to, can_manage) %}{% endcall %}
             {% endif %}

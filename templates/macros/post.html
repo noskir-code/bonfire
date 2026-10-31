@@ -31,6 +31,30 @@
 </section>
 {% endmacro %}
 
+{# Pictures, videos and sounds of a post or comment from another server,
+   loaded through the media proxy. Hidden behind a click when `sensitive`. #}
+{% macro attachments(attachments, sensitive) %}
+{% if !attachments.is_empty() %}
+{% if sensitive %}<details class="sensitive-media"><summary>Sensitive media, show</summary>{% endif %}
+<div class="attachments{% if attachments.len() == 1 %} single{% endif %}">
+    {% for attachment in attachments %}
+    {% if attachment.is_image() %}
+    <a href="{{ attachment.proxy_url() }}" class="attachment" target="_blank" rel="noopener">
+        <img src="{{ attachment.proxy_url() }}" alt="{{ attachment.description }}" loading="lazy"{% if let Some(width) = attachment.width %} width="{{ width }}"{% endif %}{% if let Some(height) = attachment.height %} height="{{ height }}"{% endif %} />
+    </a>
+    {% else if attachment.is_video() %}
+    <video src="{{ attachment.proxy_url() }}" class="attachment" controls preload="metadata"{% if !attachment.description.is_empty() %} aria-label="{{ attachment.description }}"{% endif %}></video>
+    {% else if attachment.is_audio() %}
+    <audio src="{{ attachment.proxy_url() }}" class="attachment" controls preload="none"{% if !attachment.description.is_empty() %} aria-label="{{ attachment.description }}"{% endif %}></audio>
+    {% else %}
+    <a href="{{ attachment.url }}" class="attachment file" rel="nofollow noopener">{% if attachment.description.is_empty() %}Attached file{% else %}{{ attachment.description }}{% endif %}</a>
+    {% endif %}
+    {% endfor %}
+</div>
+{% if sensitive %}</details>{% endif %}
+{% endif %}
+{% endmacro %}
+
 {# One post with its author and actions. `signed_in` shows the buttons,
    `return_to` is the page they come back to after a like or a share,
    `collapse` cuts long posts with a "Show more" button (done by system.js),
@@ -38,10 +62,10 @@
 {% macro post_card(post, signed_in, return_to, collapse, moderate) %}
 <article class="box content post" id="post-{{ post.id }}">
     {% if let Some(sharer) = post.shared_by %}
-    <p class="post-shared-by">Shared by <a href="/user/{{ sharer }}">@{{ sharer }}</a></p>
+    <p class="post-shared-by">Shared by <a href="{{ sharer.url }}">@{{ sharer.name }}</a></p>
     {% endif %}
     <header class="post-header">
-        <a href="{{ post.author.profile_url() }}" class="post-author"{% if post.author.is_remote() %} rel="nofollow noopener"{% endif %}>
+        <a href="{{ post.author.profile_url() }}" class="post-author">
             {% if let Some(url) = post.author.photo_url() %}
             <img src="{{ url }}" alt="" class="nav-avatar" />
             {% else %}
@@ -49,18 +73,39 @@
             {% endif %}
             <span>
                 <strong>{{ post.author.display_name() }}</strong>
+                {% if let Some(badge) = post.author.role_badge() %}<span class="role-badge {{ post.author.role_name() }}">{{ badge }}</span>{% endif %}
                 <span class="post-username">{{ post.author.handle() }}</span>
             </span>
         </a>
         <a href="/posts/{{ post.id }}" class="post-meta">
             <time datetime="{{ post.created_at_iso() }}" data-relative>{{ post.created_at_label() }}</time>
             {% if post.is_private() %} · <span class="only-you">Only me</span>{% endif %}
+            {% if post.is_followers_only() %} · <span class="only-you">Followers only</span>{% endif %}
+            {% if let Some(edited) = post.edited_at_iso() %} · <span title="{{ edited }}">edited</span>{% endif %}
         </a>
     </header>
     {% if let Some(community) = post.community %}
     <p class="post-community">in <a href="/community/{{ community.slug }}">{{ community.name }}</a>{% if !community.is_public %} · <span class="only-you">Members only</span>{% endif %}</p>
     {% endif %}
-    <p class="post-body" id="post-{{ post.id }}-body"{% if collapse %} data-collapsible{% endif %}>{{ post.body }}</p>
+    {% if !post.body.is_empty() %}
+    <p class="post-body" id="post-{{ post.id }}-body"{% if collapse %} data-collapsible{% endif %}>{{ post.body_html()|safe }}</p>
+    {% endif %}
+    {% call attachments(post.attachments.as_slice(), post.sensitive) %}{% endcall %}
+    {# The card of its first link, see src/preview.rs. #}
+    {% if let Some(preview) = post.preview %}
+    <a href="{{ preview.url }}" class="link-card{% if preview.image_url.is_none() %} no-image{% endif %}" rel="nofollow noopener noreferrer ugc" target="_blank">
+        {% if let Some(image) = preview.image_proxy_url() %}
+        <img src="{{ image }}" alt="" loading="lazy" class="link-card-image" />
+        {% endif %}
+        <span class="link-card-text">
+            <span class="link-card-site">{{ preview.site() }}</span>
+            <strong class="link-card-title">{{ preview.title }}</strong>
+            {% if !preview.description.is_empty() %}
+            <span class="link-card-description">{{ preview.description }}</span>
+            {% endif %}
+        </span>
+    </a>
+    {% endif %}
     <footer class="post-actions">
         {% if signed_in %}
         <form action="/posts/{{ post.id }}/like" method="post">
@@ -93,9 +138,19 @@
         <a href="{{ url }}" class="action" rel="nofollow noopener">Original</a>
         {% endif %}
 
-        {% if moderate %}
+        {% if signed_in && !post.is_own %}
+        <a href="/report?post={{ post.id }}" class="action report-link">Report</a>
+        {% endif %}
+
+        {% if signed_in && post.can_edit() %}
+        <a href="/posts/{{ post.id }}/edit" class="action">Edit</a>
+        <form action="/posts/{{ post.id }}/delete" method="post" class="post-remove" data-confirm="Delete this post?">
+            <input type="hidden" name="return" value="{{ return_to }}" />
+            <button type="submit" class="action danger">Delete</button>
+        </form>
+        {% else if moderate %}
         {% if let Some(community) = post.community %}
-        <form action="/community/{{ community.slug }}/posts/{{ post.id }}/remove" method="post" class="post-remove">
+        <form action="/community/{{ community.slug }}/posts/{{ post.id }}/remove" method="post" class="post-remove" data-confirm="Remove this post from the community?">
             <input type="hidden" name="return" value="{{ return_to }}" />
             <button type="submit" class="action danger">Remove</button>
         </form>

@@ -3,6 +3,9 @@
 //! people on Misskey, Mastodon... follow them and post in them by mentioning
 //! `@slug@domain`.
 //!
+//! Private communities are closed: joining is a request that a moderator
+//! approves, only members read the posts, and nothing reaches other servers.
+//!
 //! The slug is the address, `/community/slug`, and the Fediverse name: it
 //! shares the namespace of usernames, so `@cooking@domain` is either a user
 //! or a community, never both (see `create` and `user::create_account`).
@@ -74,6 +77,20 @@ pub const MEMBERS_TABLE: Table = Table {
     ],
 };
 
+/// Users asking to join a private community, until a moderator answers.
+pub const REQUESTS_TABLE: Table = Table {
+    name: "community_join_requests",
+    columns: &[
+        Column::new("community_id", "BIGINT").references("communities(id) ON DELETE CASCADE"),
+        Column::new("user_id", "INTEGER").references("users(id) ON DELETE CASCADE"),
+        Column::new("requested_at", "TIMESTAMPTZ").default("NOW()"),
+    ],
+    indexes: &[
+        Index::unique("community_join_requests_community_user_idx", "community_id, user_id"),
+        Index::new("community_join_requests_user_idx", "user_id"),
+    ],
+};
+
 /// Moderators besides the owner, who is always one.
 pub const MODERATORS_TABLE: Table = Table {
     name: "community_moderators",
@@ -141,7 +158,7 @@ impl Visibility {
     pub fn label(self) -> &'static str {
         match self {
             Self::Public => "Public: everyone can read, also on the Fediverse",
-            Self::Private => "Private: only members can read",
+            Self::Private => "Private: only approved members can read",
         }
     }
 
@@ -238,6 +255,8 @@ pub struct Membership {
     pub is_owner: bool,
     pub is_moderator: bool,
     pub is_ignored: bool,
+    /// Asked to join a private community, not answered yet.
+    pub has_requested: bool,
 }
 
 impl Membership {
@@ -385,26 +404,35 @@ pub async fn find_by_public_id(pool: &PgPool, public_id: i64) -> Result<Option<C
         .transpose()
 }
 
-/// The directory: communities not banned, biggest first, matching `search`
-/// in their name or slug when given.
+/// The directory: communities not banned, matching `search` in their name or
+/// slug when given, ignoring case. Most relevant first (exact slug, then
+/// starting with it, then a word starting with it), then the biggest.
 pub async fn list(pool: &PgPool, search: Option<&str>) -> Result<Vec<Community>, sqlx::Error> {
-    // `%` and `_` typed by the user are searched as is.
-    let pattern = search.map(|search| {
-        format!(
-            "%{}%",
-            search.trim().to_lowercase().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
-        )
-    });
+    search_limited(pool, search, PAGE_SIZE).await
+}
+
+/// Like `list`, at most `limit`.
+pub async fn search_limited(pool: &PgPool, search: Option<&str>, limit: i64) -> Result<Vec<Community>, sqlx::Error> {
+    let search = search.map(|search| search.trim().to_lowercase());
+    let escaped = search.as_deref().map(crate::entities::user::escape_like);
     sqlx::query(concat!(
         "SELECT ",
         community_columns!(),
         " WHERE c.status <> 'banned'
-           AND ($1::text IS NULL OR LOWER(c.name) LIKE $1 OR LOWER(c.slug) LIKE $1)
-         ORDER BY member_count DESC, c.id DESC
+           AND ($1::text IS NULL OR LOWER(c.name) LIKE '%' || $1 || '%' OR LOWER(c.slug) LIKE '%' || $1 || '%')
+         ORDER BY CASE
+                    WHEN $1::text IS NULL THEN 0
+                    WHEN LOWER(c.slug) = $3 OR LOWER(c.name) = $3 THEN 0
+                    WHEN LOWER(c.slug) LIKE $1 || '%' OR LOWER(c.name) LIKE $1 || '%' THEN 1
+                    WHEN LOWER(c.name) LIKE '% ' || $1 || '%' OR LOWER(c.slug) LIKE '%\\_' || $1 || '%' THEN 2
+                    ELSE 3
+                  END,
+                  member_count DESC, c.id DESC
          LIMIT $2"
     ))
-    .bind(pattern)
-    .bind(PAGE_SIZE)
+    .bind(escaped)
+    .bind(limit)
+    .bind(search)
     .fetch_all(pool)
     .await?
     .iter()
@@ -433,7 +461,8 @@ pub async fn membership(pool: &PgPool, community: &Community, user_id: i32) -> R
     let row = sqlx::query(
         "SELECT EXISTS (SELECT 1 FROM community_members WHERE community_id = $1 AND user_id = $2) AS member,
                 EXISTS (SELECT 1 FROM community_moderators WHERE community_id = $1 AND user_id = $2) AS moderator,
-                EXISTS (SELECT 1 FROM community_ignores WHERE community_id = $1 AND user_id = $2) AS ignored",
+                EXISTS (SELECT 1 FROM community_ignores WHERE community_id = $1 AND user_id = $2) AS ignored,
+                EXISTS (SELECT 1 FROM community_join_requests WHERE community_id = $1 AND user_id = $2) AS requested",
     )
     .bind(community.id)
     .bind(user_id)
@@ -445,6 +474,7 @@ pub async fn membership(pool: &PgPool, community: &Community, user_id: i32) -> R
         is_owner,
         is_moderator: is_owner || row.try_get("moderator")?,
         is_ignored: row.try_get("ignored")?,
+        has_requested: row.try_get("requested")?,
     })
 }
 
@@ -455,6 +485,113 @@ pub async fn join(pool: &PgPool, community_id: i64, user_id: i32) -> Result<(), 
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Asks to join a private community. Returns `false` when the user already asked.
+pub async fn request_join(pool: &PgPool, community_id: i64, user_id: i32) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query(
+        "INSERT INTO community_join_requests (community_id, user_id)
+         SELECT $1, $2 WHERE NOT EXISTS (
+            SELECT 1 FROM community_members WHERE community_id = $1 AND user_id = $2)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(community_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0)
+}
+
+/// Withdraws a request, or refuses it. Returns whether there was one.
+pub async fn remove_request(pool: &PgPool, community_id: i64, user_id: i32) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM community_join_requests WHERE community_id = $1 AND user_id = $2")
+        .bind(community_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
+}
+
+/// Makes the user a member if they asked. Returns `false` when they didn't.
+pub async fn approve_request(pool: &PgPool, community_id: i64, user_id: i32) -> Result<bool, sqlx::Error> {
+    let approved = sqlx::query(
+        "WITH approved AS (
+            DELETE FROM community_join_requests WHERE community_id = $1 AND user_id = $2 RETURNING user_id
+         )
+         INSERT INTO community_members (community_id, user_id)
+         SELECT $1, user_id FROM approved ON CONFLICT DO NOTHING",
+    )
+    .bind(community_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(approved.rows_affected() > 0)
+}
+
+/// Every pending request becomes a membership: when the community becomes
+/// public, anyone can join anyway. Returns the new members.
+pub async fn approve_all_requests(pool: &PgPool, community_id: i64) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "WITH approved AS (
+            DELETE FROM community_join_requests WHERE community_id = $1 RETURNING user_id
+         )
+         INSERT INTO community_members (community_id, user_id)
+         SELECT $1, user_id FROM approved ON CONFLICT DO NOTHING
+         RETURNING user_id",
+    )
+    .bind(community_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Pending requests, oldest first.
+pub async fn join_requests(pool: &PgPool, community_id: i64) -> Result<Vec<User>, sqlx::Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        user_columns!("u."),
+        " FROM community_join_requests r JOIN users u ON u.id = r.user_id
+         WHERE r.community_id = $1 ORDER BY r.requested_at"
+    ))
+    .bind(community_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(User::from_row)
+    .collect()
+}
+
+/// Members shown in the settings, at most this many.
+pub const MEMBERS_SHOWN: i64 = 500;
+
+/// Members, most recent first.
+pub async fn members(pool: &PgPool, community_id: i64) -> Result<Vec<User>, sqlx::Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        user_columns!("u."),
+        " FROM community_members m JOIN users u ON u.id = m.user_id
+         WHERE m.community_id = $1 ORDER BY m.joined_at DESC LIMIT $2"
+    ))
+    .bind(community_id)
+    .bind(MEMBERS_SHOWN)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(User::from_row)
+    .collect()
+}
+
+/// Ids of the owner and moderators, who answer join requests.
+pub async fn manager_ids(pool: &PgPool, community: &Community) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT user_id FROM community_moderators WHERE community_id = $1
+         UNION SELECT $2::integer WHERE $2::integer IS NOT NULL",
+    )
+    .bind(community.id)
+    .bind(community.owner_user_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// Leaving also removes the moderator role. The owner can't leave.
@@ -530,6 +667,32 @@ pub async fn set_banned(pool: &PgPool, id: i64, banned: bool) -> Result<(), sqlx
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// A post of a community as other servers know it.
+pub struct CommunityPost {
+    pub id: i64,
+    /// For posts of other servers.
+    pub ap_id: Option<String>,
+    /// Written here.
+    pub is_local: bool,
+}
+
+/// The posts of a community, newest first.
+pub async fn posts(pool: &PgPool, community_id: i64) -> Result<Vec<CommunityPost>, sqlx::Error> {
+    sqlx::query("SELECT id, ap_id, user_id IS NOT NULL AS is_local FROM posts WHERE community_id = $1 ORDER BY created_at DESC")
+        .bind(community_id)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(CommunityPost {
+                id: row.try_get("id")?,
+                ap_id: row.try_get("ap_id")?,
+                is_local: row.try_get("is_local")?,
+            })
+        })
+        .collect()
 }
 
 /// Deletes the community with its posts, rules and members.

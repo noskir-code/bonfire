@@ -1,9 +1,12 @@
+{% import "macros/post.html" as posts_ui %}
 {# One comment of a post page. `signed_in` shows the reply link, which works
-   without JavaScript (`?reply_to=`); assets/system.js fills the form in place. #}
-{% macro comment_item(comment, post_id, signed_in) %}
+   without JavaScript (`?reply_to=`); assets/system.js fills the form in place.
+   `moderate` shows "Remove" on others' comments: for the post's author, the
+   community's moderators and the site's staff. #}
+{% macro comment_item(comment, post_id, signed_in, moderate) %}
 <article class="comment" id="comment-{{ comment.id }}">
     <header class="post-header">
-        <a href="{{ comment.author.profile_url() }}" class="post-author"{% if comment.author.is_remote() %} rel="nofollow noopener"{% endif %}>
+        <a href="{{ comment.author.profile_url() }}" class="post-author">
             {% if let Some(url) = comment.author.photo_url() %}
             <img src="{{ url }}" alt="" class="nav-avatar" />
             {% else %}
@@ -11,17 +14,24 @@
             {% endif %}
             <span>
                 <strong>{{ comment.author.display_name() }}</strong>
+                {% if let Some(badge) = comment.author.role_badge() %}<span class="role-badge {{ comment.author.role_name() }}">{{ badge }}</span>{% endif %}
                 <span class="post-username">{{ comment.author.handle() }}</span>
             </span>
         </a>
-        <time class="post-meta" datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
+        <span class="post-meta">
+            <time datetime="{{ comment.created_at_iso() }}" data-relative>{{ comment.created_at_label() }}</time>
+            {% if let Some(edited) = comment.edited_at_iso() %} · <span title="{{ edited }}">edited</span>{% endif %}
+        </span>
     </header>
     {% if let Some(parent_author) = comment.parent_author %}
     {% if let Some(parent_id) = comment.parent_id %}
     <a href="#comment-{{ parent_id }}" class="reply-context">Replying to @{{ parent_author }}</a>
     {% endif %}
     {% endif %}
-    <p class="post-body">{{ comment.body }}</p>
+    {% if !comment.body.is_empty() %}
+    <p class="post-body">{{ comment.body_html()|safe }}</p>
+    {% endif %}
+    {% call posts_ui::attachments(comment.attachments.as_slice(), comment.sensitive) %}{% endcall %}
     <footer class="comment-actions">
         {% if signed_in %}
         <form action="/comments/{{ comment.id }}/like" method="post">
@@ -35,6 +45,19 @@
             data-reply-to="{{ comment.id }}"
             data-reply-author="{{ comment.author.mention() }}"
         >Reply</a>
+        {% if !comment.is_own %}
+        <a href="/report?comment={{ comment.id }}" class="action report-link">Report</a>
+        {% endif %}
+        {% if comment.is_own && !comment.author.is_remote() %}
+        <a href="/comments/{{ comment.id }}/edit" class="action">Edit</a>
+        <form action="/comments/{{ comment.id }}/delete" method="post" data-confirm="Delete this comment and its replies?">
+            <button type="submit" class="action danger">Delete</button>
+        </form>
+        {% else if moderate %}
+        <form action="/comments/{{ comment.id }}/delete" method="post" data-confirm="Remove this comment and its replies?">
+            <button type="submit" class="action danger">Remove</button>
+        </form>
+        {% endif %}
         {% else %}
         <a href="/login" class="action">Like · {{ comment.like_count }}</a>
         {% endif %}

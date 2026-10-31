@@ -9,8 +9,11 @@
         sans-serif;
 }
 
-/* Colors */
+/* Colors. Light by default, dark when the system asks for it, unless the
+   user chose a theme with the button of the menu (`data-theme` on <html>,
+   see base.html and system.js). The two dark blocks must stay the same. */
 :root {
+    color-scheme: light;
     --main: hsl(200, 23%, 96.5%);
     --text: black;
     --light-text: hsl(0, 0%, 30%);
@@ -18,10 +21,14 @@
     --text-button: black;
     --background: white;
     --error: hsl(0, 70%, 45%);
+    --danger: hsl(0, 70%, 40%);
+    --success: hsl(140, 50%, 35%);
+    --hover-brightness: 0.95;
 }
 
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
         --main: hsl(200, 23%, 22.5%);
         --text: white;
         --light-text: hsl(0, 0%, 70%);
@@ -29,7 +36,24 @@
         --text-button: white;
         --background: hsl(200, 23%, 10%);
         --error: hsl(0, 80%, 65%);
+        --danger: hsl(0, 80%, 70%);
+        --success: hsl(140, 50%, 60%);
+        --hover-brightness: 1.25;
     }
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --main: hsl(200, 23%, 22.5%);
+    --text: white;
+    --light-text: hsl(0, 0%, 70%);
+    --button: hsl(200, 23%, 10%);
+    --text-button: white;
+    --background: hsl(200, 23%, 10%);
+    --error: hsl(0, 80%, 65%);
+    --danger: hsl(0, 80%, 70%);
+    --success: hsl(140, 50%, 60%);
+    --hover-brightness: 1.25;
 }
 
 body {
@@ -256,12 +280,29 @@ Profile
     display: block;
 }
 
+/* Only the avatar goes up over the banner (its own negative margin): the
+   name, counts and buttons always stay below it. */
 .profile-header {
     display: flex;
     align-items: flex-end;
     gap: 1em;
-    padding: 0 1.5em 1em;
+    padding: 0.75em 1.5em 1em;
+}
+
+.profile-header > .avatar {
+    align-self: flex-start;
     margin-top: -3.5em;
+}
+
+/* The name and @username on a line, apart, the second below when too long. */
+.profile-header .flex.center {
+    flex-wrap: wrap;
+    column-gap: 0.4em;
+}
+
+/* Its margin counts in its larger font size: the same 3.5em of the page. */
+.profile-header > .avatar.placeholder {
+    margin-top: -1.4em;
 }
 
 .avatar {
@@ -305,13 +346,7 @@ Profile
 }
 
 .saved {
-    color: hsl(140, 50%, 35%);
-}
-
-@media (prefers-color-scheme: dark) {
-    .saved {
-        color: hsl(140, 50%, 60%);
-    }
+    color: var(--success);
 }
 
 .profile-edit form {
@@ -540,10 +575,12 @@ Posts
 }
 
 /* Read by screen readers, not shown. */
+/* Read by screen readers only. The size wins over page rules like
+   `.profile-edit label { width: 100% }`, which made the page scroll sideways. */
 .visually-hidden {
     position: absolute;
-    width: 1px;
-    height: 1px;
+    width: 1px !important;
+    height: 1px !important;
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
@@ -702,11 +739,6 @@ Post actions and comments
 Notifications
 */
 
-.notifications {
-    width: 100%;
-    max-width: 40em;
-}
-
 .notifications-header {
     display: flex;
     flex-wrap: wrap;
@@ -808,27 +840,9 @@ Communities
 */
 
 /* Narrow enough to stay clear of the fixed menu on the left. */
-.communities,
-.community-header,
-.community-layout {
-    width: 100%;
-    max-width: 50em;
-    box-sizing: border-box;
-}
 
 .community-search {
-    display: flex;
-    gap: 0.5em;
     margin-bottom: 1em;
-}
-
-.community-search input {
-    flex: 1;
-    min-width: 0;
-    padding: 0.4em;
-    color: var(--text);
-    background-color: var(--background);
-    border: solid 0.1em var(--button);
 }
 
 .community-list,
@@ -914,11 +928,17 @@ Communities
 .community-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.5em;
     margin-top: 1em;
 }
 
-/* Posts first, the about / rules / moderators column on the side, below on phones. */
+.community-actions form {
+    margin: 0;
+}
+
+/* Posts first, the about / rules / moderators column on the side, below on
+   phones. As wide as the header above it (`.content`). */
 .community-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 15em;
@@ -1046,17 +1066,1053 @@ form.inline {
 
 .button.danger,
 .action.danger {
-    color: hsl(0, 70%, 40%);
-}
-
-@media (prefers-color-scheme: dark) {
-    .button.danger,
-    .action.danger {
-        color: hsl(0, 80%, 70%);
-    }
+    color: var(--danger);
 }
 
 .danger-zone p {
     width: 100%;
     margin: 0;
+}
+
+/* Media of posts and comments from other servers, see macros/post.html. */
+.attachments {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25em;
+    margin: 0.5em 0;
+}
+
+.attachments.single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.attachment {
+    display: block;
+    width: 100%;
+    border-radius: 0.5em;
+    overflow: hidden;
+    background-color: var(--button);
+}
+
+.attachment img,
+video.attachment {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 32em;
+    object-fit: cover;
+}
+
+.attachments.single .attachment img,
+.attachments.single video.attachment {
+    object-fit: contain;
+}
+
+audio.attachment {
+    background-color: transparent;
+}
+
+.attachment.file {
+    padding: 0.75em;
+    color: var(--text);
+}
+
+.sensitive-media summary {
+    cursor: pointer;
+    padding: 0.75em;
+    margin: 0.5em 0;
+    border-radius: 0.5em;
+    background-color: var(--button);
+    color: var(--text-button);
+}
+
+/* A search field with its magnifier button: the bar at the top of every
+   page (see base.html) and the communities directory. */
+/* `form.` to win over the forms of `.profile-edit` pages. */
+form.search-field {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0;
+}
+
+.site-search {
+    width: 60%;
+    margin-bottom: 1em;
+}
+
+.search-field input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5em 0.75em;
+    font-size: 1em;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-right: none;
+    border-radius: 0.3em 0 0 0.3em;
+}
+
+.search-field input:focus-visible {
+    outline: none;
+    border-color: var(--light-text);
+}
+
+.search-field button.button {
+    display: flex;
+    align-items: center;
+    padding: 0 0.9em;
+    border-radius: 0 0.3em 0.3em 0;
+}
+
+.search-hint {
+    margin-top: 1.5em;
+}
+
+/* Search results and the pages of remote accounts. */
+.account-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5em;
+}
+
+.account-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.account-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em 0;
+}
+
+.account-list li .post-author {
+    flex: 1;
+    min-width: 0;
+}
+
+.edit-form textarea {
+    width: 100%;
+}
+
+/* "12 followers · 3 following" under a profile's name. */
+.profile-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em 1em;
+    margin: 0.25em 0 0;
+}
+
+.profile-counts a {
+    color: var(--light-text);
+    text-decoration: none;
+}
+
+.profile-counts strong {
+    color: var(--text);
+}
+
+/* The signed-in user and Logout (or Login and Register), top right. */
+.account-bar {
+    gap: 0.5em;
+    padding: 0.5em 1em;
+}
+
+.account-bar form {
+    margin: 0;
+}
+
+.account-button .nav-avatar {
+    margin-right: 0.5em;
+}
+
+/* The main action of a group: "Register", "Add friend". */
+.button.primary {
+    color: var(--background);
+    background-color: var(--text);
+}
+
+.button:hover {
+    filter: brightness(var(--hover-brightness));
+}
+
+/* "Add friend" and "Follow" on a profile. */
+.profile-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+
+.profile-actions form {
+    margin: 0;
+}
+
+/* Suggestions under the search bar while typing, see system.js. */
+.site-search {
+    position: relative;
+}
+
+.search-suggestions {
+    position: absolute;
+    top: calc(100% + 0.25em);
+    left: 0;
+    right: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 0.4em 0;
+    list-style: none;
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-radius: 0.5em;
+    box-shadow: 0 0.5em 1.5em hsl(0 0% 0% / 0.15);
+}
+
+.search-suggestions .group {
+    padding: 0.4em 1em 0.2em;
+    font-size: 0.8em;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: var(--light-text);
+}
+
+.search-suggestions a {
+    display: flex;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0.4em 1em;
+    color: var(--text);
+    text-decoration: none;
+}
+
+.search-suggestions a[aria-selected="true"],
+.search-suggestions a:hover {
+    background-color: var(--main);
+}
+
+.search-suggestions .detail {
+    margin-left: 0.4em;
+    color: var(--light-text);
+    font-size: 0.9em;
+}
+
+.search-suggestions .all {
+    border-top: solid 0.1em var(--button);
+    margin-top: 0.3em;
+    color: var(--light-text);
+}
+
+/* The light / dark switch under Settings in the menu, see system.js. */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    width: 100%;
+    padding: 1em;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+/* `display: flex` above would show it while it's `hidden` (no JavaScript). */
+.theme-toggle[hidden] {
+    display: none;
+}
+
+.theme-toggle:hover {
+    background-color: var(--button);
+}
+
+.theme-toggle svg {
+    flex-shrink: 0;
+}
+
+/* The icon of the theme it switches to: pressed means dark now. */
+.theme-toggle[aria-pressed="true"] .moon,
+.theme-toggle:not([aria-pressed="true"]) .sun {
+    display: none;
+}
+
+/* --- Phones: a top bar with a ☰ button, the menu slides in from the left. ---
+   Only with JavaScript (the `js` class, see base.html): without it the menu
+   is shown under the top bar. */
+.menu-toggle,
+.mobile-brand,
+.menu-backdrop {
+    display: none;
+}
+
+@media (max-width: 50em) {
+    .grid.page {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5em;
+        height: 3.75em;
+        padding: 0 0.75em;
+        box-sizing: border-box;
+        background-color: var(--background);
+        border-bottom: solid 0.1em var(--button);
+    }
+
+    .js .menu-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.5em;
+        height: 2.5em;
+        padding: 0;
+        color: var(--text);
+        background: none;
+        border: none;
+        border-radius: 0.3em;
+        cursor: pointer;
+    }
+
+    .menu-toggle:hover {
+        background-color: var(--button);
+    }
+
+    .mobile-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.4em;
+        margin-right: auto;
+        font-size: 1.3em;
+        color: var(--text);
+        text-decoration: none;
+    }
+
+    .mobile-brand .logo {
+        width: 1.5em;
+    }
+
+    /* Only the avatar of the account button: the name takes too much room. */
+    .account-bar {
+        padding: 0;
+    }
+
+    .account-bar a.button:has(.nav-avatar) {
+        padding: 0.3em;
+    }
+
+    .account-bar a.button:has(.nav-avatar) > span:not(.nav-avatar) {
+        display: none;
+    }
+
+    .account-bar a.button .nav-avatar {
+        margin: 0;
+    }
+
+    /* The menu, out of the screen until the ☰ button opens it. */
+    .js .side.infos {
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 3;
+        width: min(17em, 85vw);
+        height: auto;
+        overflow-y: auto;
+        transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.2s ease, visibility 0.2s;
+        box-shadow: 0 0 2em hsl(0 0% 0% / 0.3);
+    }
+
+    /* Visible at once when opening (to take the focus), hidden only after
+       sliding out when closing. */
+    .js.menu-open .side.infos {
+        transform: none;
+        visibility: visible;
+        transition: transform 0.2s ease;
+    }
+
+    .js.menu-open .menu-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 2;
+        background-color: hsl(0 0% 0% / 0.4);
+    }
+
+    .js.menu-open body {
+        overflow: hidden;
+    }
+
+    /* Without JavaScript: the menu under the bar, in the page. */
+    html:not(.js) .grid.page {
+        position: static;
+        height: auto;
+        padding: 0.5em 0.75em;
+    }
+
+    html:not(.js) .side.infos {
+        position: static;
+        order: 1;
+        width: 100%;
+        height: auto;
+    }
+
+    html:not(.js) .side.infos > header {
+        display: none;
+    }
+
+    /* The page uses the whole width, under the bar. */
+    .content {
+        width: 100%;
+    }
+
+    .box.content {
+        box-sizing: border-box;
+    }
+
+    .page-content {
+        margin-top: 5em;
+        padding: 0 0.75em;
+        box-sizing: border-box;
+    }
+
+    html:not(.js) .page-content {
+        margin-top: 1em;
+    }
+
+    .site-search {
+        width: 100%;
+    }
+
+    /* Profile header: the avatar and the name on a line, the buttons below. */
+    .profile-header {
+        flex-wrap: wrap;
+        padding: 0.75em 1em 1em;
+    }
+
+    .profile-header > .avatar {
+        margin-top: -2.5em;
+    }
+
+    .profile-header > div:not(.profile-actions, .avatar) {
+        flex: 1 1 10em;
+        min-width: 0;
+    }
+
+    .profile-header .profile-name {
+        font-size: 1.3em;
+        overflow-wrap: break-word;
+    }
+
+    .profile-counts {
+        gap: 0.25em 0.75em;
+    }
+
+    .avatar {
+        width: 5em;
+        height: 5em;
+    }
+
+    .avatar.placeholder {
+        font-size: 1.8em;
+        width: 2.8em;
+        height: 2.8em;
+    }
+
+    .profile-header .profile-edit-link {
+        margin-left: 0;
+    }
+
+    /* Community header: a smaller photo, the name broken between words. */
+    .community-photo {
+        width: 3.5em;
+        height: 3.5em;
+    }
+
+    .community-photo.placeholder {
+        font-size: 1.5em;
+        width: 2.35em;
+        height: 2.35em;
+    }
+
+    .community-identity > div {
+        min-width: 0;
+    }
+
+    .community-identity h1 {
+        font-size: 1.4em;
+        overflow-wrap: break-word;
+    }
+}
+
+/* --- Between phones and wide screens: the menu stays a column on the left,
+   so the page goes in the space to its right (centred at 60% of the window,
+   as on wide screens, it would slide under the menu), below the account
+   buttons of the top right. --- */
+@media (min-width: 50.01em) and (max-width: 78em) {
+    .content {
+        width: 100%;
+        max-width: 48em;
+    }
+
+    .box.content {
+        box-sizing: border-box;
+    }
+
+    .page-content {
+        width: calc(100% - 14em);
+        max-width: none;
+        margin-left: 14em;
+        margin-top: 3.75em;
+        padding: 0 1.5em;
+        box-sizing: border-box;
+    }
+
+    .site-search {
+        width: 100%;
+        max-width: 48em;
+    }
+}
+
+@media (max-width: 50em) and (prefers-reduced-motion: reduce) {
+    .js .side.infos {
+        transition: none;
+    }
+}
+
+/* Addresses in posts and comments, made links by `linkify.rs`. */
+.post-body a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--light-text);
+    text-underline-offset: 0.15em;
+    overflow-wrap: anywhere;
+}
+
+.post-body a:hover {
+    text-decoration-color: currentColor;
+    text-decoration-thickness: 0.12em;
+}
+
+/* The card of a link under a post, see macros/post.html. */
+.link-card {
+    display: flex;
+    flex-direction: column;
+    margin: 0.75em 0;
+    overflow: hidden;
+    border: solid 0.1em var(--button);
+    border-radius: 0.5em;
+    color: var(--text);
+    background-color: var(--background);
+    text-decoration: none;
+}
+
+.link-card:hover {
+    border-color: var(--light-text);
+}
+
+.link-card-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1.91 / 1;
+    object-fit: cover;
+    background-color: var(--button);
+}
+
+.link-card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    padding: 0.75em 1em;
+    min-width: 0;
+}
+
+.link-card-site {
+    font-size: 0.85em;
+    color: var(--light-text);
+}
+
+.link-card-title {
+    overflow-wrap: anywhere;
+}
+
+/* At most three lines: the card stays small. */
+.link-card-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    color: var(--light-text);
+    font-size: 0.9em;
+}
+
+/* --- Messenger, see messenger.html and conversation.html. --- */
+.messenger-new {
+    margin: 1em 0 0.5em;
+}
+
+.messenger-new button.button.primary {
+    padding: 0 1.2em;
+}
+
+.conversation-list {
+    margin: 1em 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.conversation-link {
+    display: flex;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0.75em 0.5em;
+    border-top: solid 0.1em var(--button);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.conversation-link:hover {
+    background-color: var(--button);
+}
+
+.conversation-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.conversation-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 0.4em;
+}
+
+.conversation-top time {
+    margin-left: auto;
+}
+
+.conversation-excerpt {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--light-text);
+}
+
+/* A friend without a message yet: the invitation in italics. */
+.conversation-link.friend .conversation-excerpt {
+    font-style: italic;
+}
+
+.conversation-top .post-meta:last-child {
+    margin-left: auto;
+}
+
+/* Unread: bold, with a dot. */
+.conversation-link.unread .conversation-excerpt {
+    color: var(--text);
+    font-weight: bold;
+}
+
+.conversation-link.unread::after {
+    content: "";
+    flex-shrink: 0;
+    width: 0.6em;
+    height: 0.6em;
+    margin-left: 0.5em;
+    border-radius: 50%;
+    background-color: hsl(5, 75%, 50%);
+}
+
+/* All its padding: the site's `header` rule (for the logo) adds 2em. */
+.conversation-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0 0 0.75em;
+    border-bottom: solid 0.1em var(--button);
+}
+
+.conversation-header .action {
+    font-size: 1.3em;
+    text-decoration: none;
+    color: var(--text);
+}
+
+.conversation-note {
+    margin: 0.75em 0 0;
+}
+
+.message-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    margin: 1em 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* The messenger reaches the bottom of the window: the page's content
+   stretches down (the body is a column), and the box with it. The list of
+   conversations still grows past it when long. */
+body:has(.messenger, .conversation) .page-content {
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 1em;
+}
+
+body:has(.messenger, .conversation) .page-content > .box {
+    flex: 1;
+}
+
+/* A conversation takes exactly the window, like a chat app: the header and
+   the message box stay, only the messages scroll (from the bottom). */
+body:has(.conversation) {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+}
+
+.conversation {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    box-sizing: border-box;
+}
+
+.conversation .message-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0.5em 0 0;
+    padding: 0.5em 0.25em;
+    overscroll-behavior: contain;
+}
+
+/* Few messages: at the bottom, next to the message box. */
+.conversation .message-list > :first-child {
+    margin-top: auto;
+}
+
+.message {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.25em;
+    max-width: 80%;
+}
+
+.message.mine {
+    align-self: flex-end;
+}
+
+.message-avatar .nav-avatar {
+    margin-right: 0.25em;
+}
+
+.message-bubble {
+    min-width: 0;
+    padding: 0.5em 0.8em;
+    border-radius: 1em 1em 1em 0.3em;
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+}
+
+.message.mine .message-bubble {
+    border-radius: 1em 1em 0.3em 1em;
+    color: var(--background);
+    background-color: var(--text);
+    border-color: var(--text);
+}
+
+.message.mine .message-bubble a {
+    text-decoration-color: currentColor;
+}
+
+.message-bubble .post-body {
+    margin: 0;
+}
+
+.message-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 0.4em;
+    margin-top: 0.2em;
+    font-size: 0.8em;
+    opacity: 0.75;
+}
+
+.message.mine .message-meta .action {
+    padding: 0;
+    color: inherit;
+}
+
+.message-meta .action {
+    padding: 0;
+    font-size: 1em;
+}
+
+.message.arriving {
+    animation: arrive 0.3s ease-out;
+}
+
+@keyframes arrive {
+    from {
+        opacity: 0;
+        transform: translateY(0.5em);
+    }
+}
+
+.message-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.5em;
+    padding: 0.75em 0 0;
+    border-top: solid 0.1em var(--button);
+    background-color: var(--main);
+}
+
+.message-form .error {
+    width: 100%;
+    margin: 0;
+}
+
+.message-form textarea {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5em 0.75em;
+    font: inherit;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-radius: 0.5em;
+    resize: vertical;
+}
+
+.message-form button.button {
+    padding: 0.55em 1.2em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .message.arriving {
+        animation: none;
+    }
+}
+
+/* The dialog asking before a deletion, see setupConfirmations in system.js. */
+.confirm-dialog {
+    width: min(26em, calc(100vw - 2em));
+    padding: 1.5em;
+    border: solid 0.1em var(--button);
+    border-radius: 0.75em;
+    color: var(--text);
+    background-color: var(--main);
+    box-shadow: 0 1em 3em hsl(0 0% 0% / 0.25);
+}
+
+.confirm-dialog::backdrop {
+    background-color: hsl(0 0% 0% / 0.45);
+}
+
+.confirm-dialog[open] {
+    animation: dialog-in 0.15s ease-out;
+}
+
+@keyframes dialog-in {
+    from {
+        opacity: 0;
+        transform: translateY(0.5em) scale(0.98);
+    }
+}
+
+.confirm-dialog-text {
+    margin: 0 0 1.25em;
+    font-size: 1.05em;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.confirm-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+
+.confirm-dialog button.button {
+    padding: 0.5em 1.1em;
+}
+
+/* The confirming button: red, it deletes. */
+.button.danger-filled {
+    color: white;
+    background-color: hsl(0, 70%, 45%);
+}
+
+.button:focus-visible {
+    outline: solid 0.15em var(--text);
+    outline-offset: 0.15em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .confirm-dialog[open] {
+        animation: none;
+    }
+}
+
+/* --- Reports and the moderation dashboard, see report.html and moderation.html. --- */
+.report-link,
+.report-button {
+    color: var(--light-text);
+}
+
+.report-target {
+    margin: 0.75em 0;
+    padding: 0.75em 1em;
+    border-left: solid 0.25em var(--button);
+    background-color: var(--background);
+    border-radius: 0 0.5em 0.5em 0;
+}
+
+.report-excerpt {
+    margin: 0.4em 0 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    color: var(--light-text);
+    max-height: 9em;
+    overflow: hidden;
+}
+
+.report-form fieldset {
+    margin: 1em 0;
+    padding: 0;
+    border: none;
+}
+
+.report-form legend {
+    font-weight: bold;
+    margin-bottom: 0.5em;
+}
+
+.report-reasons label {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.3em 0;
+}
+
+.report-form textarea {
+    width: 100%;
+    margin-top: 0.4em;
+    padding: 0.5em;
+    font: inherit;
+    color: var(--text);
+    background-color: var(--background);
+    border: solid 0.1em var(--button);
+    border-radius: 0.3em;
+    box-sizing: border-box;
+}
+
+.report-form .report-actions {
+    justify-content: flex-end;
+}
+
+.report-list {
+    margin: 1em 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.report-card {
+    padding: 1em 0;
+    border-top: solid 0.1em var(--button);
+}
+
+.report-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em 0.75em;
+    padding: 0;
+}
+
+.report-reason {
+    padding: 0.15em 0.6em;
+    border-radius: 1em;
+    font-size: 0.85em;
+    font-weight: bold;
+    color: white;
+    background-color: hsl(0, 70%, 45%);
+}
+
+.report-comment {
+    margin: 0.5em 0;
+    padding-left: 0.75em;
+    border-left: solid 0.2em var(--light-text);
+    font-style: italic;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
+.report-account {
+    margin: 0.5em 0;
+}
+
+.report-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5em;
+    margin-top: 0.75em;
+}
+
+.report-actions form {
+    margin: 0;
+}
+
+.button.danger {
+    background-color: var(--button);
+}
+
+/* "Creator" and "Moderator" next to the names of the site's staff. */
+.role-badge {
+    display: inline-block;
+    margin: 0 0.3em;
+    padding: 0.05em 0.5em;
+    border-radius: 1em;
+    font-size: 0.75em;
+    font-weight: bold;
+    line-height: 1.5;
+    vertical-align: middle;
+    white-space: nowrap;
+    color: var(--text);
+    background-color: var(--button);
+}
+
+/* The creator: the main color of the site. */
+.role-badge.admin {
+    color: var(--background);
+    background-color: var(--text);
+}
+
+.moderation-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+
+.staff .account-list .role-badge {
+    margin-right: auto;
+}
+
+.staff-add button.button.primary {
+    padding: 0 1.2em;
 }

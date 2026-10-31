@@ -22,6 +22,7 @@ use crate::{
             RULE_BODY_MAX_CHARS, RULE_TITLE_MAX_CHARS, Rule, SLUG_MAX_LEN, SLUG_MIN_LEN, Visibility,
         },
         federation as store,
+        notification,
         post::{self, BODY_MAX_CHARS, BodyError, Post, Sort},
         user::User,
     },
@@ -158,11 +159,15 @@ fn error_message(query: &HashMap<String, String>) -> Option<String> {
         .map(CommunityError::message)
 }
 
-/// Back to `url` with the result.
+/// Back to `url` (maybe with a `#fragment`) with the result.
 fn back(url: &str, result: Result<(), CommunityError>) -> Response {
+    let (path, fragment) = match url.split_once('#') {
+        Some((path, fragment)) => (path, format!("#{fragment}")),
+        None => (url, String::new()),
+    };
     let location = match result {
-        Ok(()) => format!("{url}?saved=1"),
-        Err(error) => format!("{url}?error={}", error.code()),
+        Ok(()) => format!("{path}?saved=1{fragment}"),
+        Err(error) => format!("{path}?error={}{fragment}", error.code()),
     };
     Redirect::to(&location).into_response()
 }
@@ -449,6 +454,7 @@ pub async fn community_page(
     })
 }
 
+/// Joins a public community. For a private one, asks its moderators.
 pub async fn join(State(state): State<AppState>, session: Session, Path(slug): Path<String>) -> Response {
     let loaded = match load_for_action(&state, &session, &slug, |_| true).await {
         Ok(loaded) => loaded,
@@ -456,9 +462,105 @@ pub async fn join(State(state): State<AppState>, session: Session, Path(slug): P
     };
     let url = format!("/community/{}", loaded.community.slug);
     let me = loaded.viewer().map(|viewer| viewer.id).unwrap_or_default();
+    if loaded.community.is_public() || loaded.is_staff() {
+        return back(
+            &url,
+            community::join(&loaded.pool, loaded.community.id, me).await.map_err(server_error),
+        );
+    }
+    let result = async {
+        let is_new = community::request_join(&loaded.pool, loaded.community.id, me).await?;
+        if is_new {
+            let managers = community::manager_ids(&loaded.pool, &loaded.community).await?;
+            notification::join_requested(&loaded.pool, loaded.community.id, &managers, me).await?;
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    back(&url, result.map_err(server_error))
+}
+
+/// Withdraws a request to join.
+pub async fn cancel_request(State(state): State<AppState>, session: Session, Path(slug): Path<String>) -> Response {
+    let loaded = match load_for_action(&state, &session, &slug, |_| true).await {
+        Ok(loaded) => loaded,
+        Err(response) => return response,
+    };
+    let url = format!("/community/{}", loaded.community.slug);
+    let me = loaded.viewer().map(|viewer| viewer.id).unwrap_or_default();
+    let result = async {
+        if community::remove_request(&loaded.pool, loaded.community.id, me).await? {
+            notification::join_request_answered(&loaded.pool, loaded.community.id, me).await?;
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    back(&url, result.map_err(server_error))
+}
+
+/// Accepts or refuses a request to join, by the moderators.
+async fn answer_request(state: AppState, session: Session, slug: String, user_id: i32, approve: bool) -> Response {
+    let loaded = match load_for_action(&state, &session, &slug, Loaded::can_manage).await {
+        Ok(loaded) => loaded,
+        Err(response) => return response,
+    };
+    let me = loaded.viewer().map(|viewer| viewer.id).unwrap_or_default();
+    let result = async {
+        let answered = if approve {
+            community::approve_request(&loaded.pool, loaded.community.id, user_id).await?
+        } else {
+            community::remove_request(&loaded.pool, loaded.community.id, user_id).await?
+        };
+        if answered {
+            notification::join_request_answered(&loaded.pool, loaded.community.id, user_id).await?;
+            if approve {
+                notification::join_approved(&loaded.pool, loaded.community.id, user_id, me).await?;
+            }
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    back(&format!("{}#requests", settings_url(&loaded.community)), result.map_err(server_error))
+}
+
+pub async fn approve_request(
+    State(state): State<AppState>,
+    session: Session,
+    Path((slug, user_id)): Path<(String, i32)>,
+) -> Response {
+    answer_request(state, session, slug, user_id, true).await
+}
+
+pub async fn reject_request(
+    State(state): State<AppState>,
+    session: Session,
+    Path((slug, user_id)): Path<(String, i32)>,
+) -> Response {
+    answer_request(state, session, slug, user_id, false).await
+}
+
+/// Removes a member (and their moderator role), by the moderators. The owner
+/// stays; only the owner or the staff can remove a moderator.
+pub async fn remove_member(
+    State(state): State<AppState>,
+    session: Session,
+    Path((slug, user_id)): Path<(String, i32)>,
+) -> Response {
+    let loaded = match load_for_action(&state, &session, &slug, Loaded::can_manage).await {
+        Ok(loaded) => loaded,
+        Err(response) => return response,
+    };
+    let url = format!("{}#members", settings_url(&loaded.community));
+    let target_is_moderator = match community::membership(&loaded.pool, &loaded.community, user_id).await {
+        Ok(membership) => membership.is_moderator,
+        Err(err) => return back(&url, Err(server_error(err))),
+    };
+    if target_is_moderator && !(loaded.membership.is_owner || loaded.is_staff()) {
+        return error_page(loaded.layout, StatusCode::FORBIDDEN, "Only the owner can remove a moderator.");
+    }
     back(
         &url,
-        community::join(&loaded.pool, loaded.community.id, me).await.map_err(server_error),
+        community::quit(&loaded.pool, loaded.community.id, user_id).await.map_err(server_error),
     )
 }
 
@@ -515,6 +617,7 @@ pub async fn create_post(
     match result {
         Ok(post_id) => {
             notifier::post_created(&state, &loaded.pool, post_id).await;
+            state.previews.notify_one();
             Redirect::to(&format!("{url}?sort=new#post-{post_id}")).into_response()
         }
         Err(error) => Redirect::to(&format!("{url}?error={}#composer", error.code())).into_response(),
@@ -533,8 +636,20 @@ pub async fn remove_post(
         Err(response) => return response,
     };
     let url = format!("/community/{}", loaded.community.slug);
+    // Only posts of this community.
+    let in_community = post::find(&loaded.pool, post_id, loaded.viewer().map(|viewer| viewer.id))
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|post| post.community.is_some_and(|community| community.id == loaded.community.id));
+    let deletions = if in_community {
+        notifier::post_deleting(&state, &loaded.pool, post_id).await
+    } else {
+        notifier::Deletions::default()
+    };
     match post::delete_in_community(&loaded.pool, post_id, loaded.community.id).await {
         Ok(_) => {
+            deletions.send(&state, &loaded.pool).await;
             let moderator = loaded.viewer().map(|viewer| viewer.username.as_str()).unwrap_or_default();
             tracing::info!("@{} removed post {} from {}", moderator, post_id, loaded.community.slug);
             Redirect::to(&local_path(form.get("return"), &url)).into_response()
@@ -553,10 +668,14 @@ pub async fn toggle_ban(State(state): State<AppState>, session: Session, Path(sl
     let banned = !loaded.community.is_banned();
     let staff = loaded.viewer().map(|viewer| viewer.username.as_str()).unwrap_or_default();
     tracing::info!("@{} {} community {}", staff, if banned { "banned" } else { "unbanned" }, loaded.community.slug);
-    back(
-        &url,
-        community::set_banned(&loaded.pool, loaded.community.id, banned).await.map_err(server_error),
-    )
+    if let Err(err) = community::set_banned(&loaded.pool, loaded.community.id, banned).await {
+        return back(&url, Err(server_error(err)));
+    }
+    // Closed: other servers stop showing it.
+    if banned && loaded.community.is_federated() {
+        notifier::community_left_fediverse(&state, &loaded.pool, &loaded.community).await;
+    }
+    back(&url, Ok(()))
 }
 
 /// Deletes the community and its posts, by its owner or the site's staff.
@@ -565,9 +684,11 @@ pub async fn delete_community(State(state): State<AppState>, session: Session, P
         Ok(loaded) => loaded,
         Err(response) => return response,
     };
+    let deletions = notifier::community_deleting(&state, &loaded.pool, &loaded.community).await;
     if let Err(err) = community::delete(&loaded.pool, loaded.community.id).await {
         return back(&format!("/community/{}/settings", loaded.community.slug), Err(server_error(err)));
     }
+    deletions.send(&state, &loaded.pool).await;
     if let Some(photo) = &loaded.community.photo_url {
         image::remove_image(ImageOwner::Community(loaded.community.id), photo).await;
     }
@@ -588,6 +709,9 @@ struct SettingsTemplate {
     is_staff: bool,
     rules: Vec<Rule>,
     moderators: Vec<Moderator>,
+    /// Pending requests to join, for private communities.
+    requests: Vec<User>,
+    members: Vec<User>,
     error: Option<String>,
     saved: bool,
     visibilities: [Visibility; 2],
@@ -612,7 +736,17 @@ pub async fn settings_page(
     let Loaded { pool, layout, community, membership } = loaded;
     let rules = community::rules(&pool, community.id).await.unwrap_or_default();
     let moderators = community::moderators(&pool, &community).await.unwrap_or_default();
+    let requests = community::join_requests(&pool, community.id).await.unwrap_or_else(|err| {
+        tracing::error!("failed to load requests of {}: {}", community.slug, err);
+        Vec::new()
+    });
+    let members = community::members(&pool, community.id).await.unwrap_or_else(|err| {
+        tracing::error!("failed to load members of {}: {}", community.slug, err);
+        Vec::new()
+    });
     render_template(&SettingsTemplate {
+        requests,
+        members,
         title: format!("Settings of {}", community.name),
         layout,
         community,
@@ -652,10 +786,37 @@ pub async fn update_details(
         let visibility = Visibility::parse(field("visibility")).ok_or(CommunityError::InvalidVisibility)?;
         community::update_details(&loaded.pool, loaded.community.id, &name, &description, visibility)
             .await
-            .map_err(server_error)
+            .map_err(server_error)?;
+        Ok(visibility)
     }
     .await;
-    back(&settings_url(&loaded.community), result)
+    match result {
+        // Now private: other servers must stop showing it.
+        Ok(Visibility::Private) if loaded.community.is_federated() => {
+            notifier::community_left_fediverse(&state, &loaded.pool, &loaded.community).await;
+        }
+        // Now public: anyone can join, the requests become memberships.
+        Ok(Visibility::Public) if !loaded.community.is_public() => {
+            let me = loaded.viewer().map(|viewer| viewer.id).unwrap_or_default();
+            match community::approve_all_requests(&loaded.pool, loaded.community.id).await {
+                Ok(user_ids) => {
+                    for user_id in user_ids {
+                        let notified = async {
+                            notification::join_request_answered(&loaded.pool, loaded.community.id, user_id).await?;
+                            notification::join_approved(&loaded.pool, loaded.community.id, user_id, me).await
+                        }
+                        .await;
+                        if let Err(err) = notified {
+                            tracing::warn!("failed to notify approval in {}: {}", loaded.community.slug, err);
+                        }
+                    }
+                }
+                Err(err) => tracing::error!("failed to approve requests of {}: {}", loaded.community.slug, err),
+            }
+        }
+        _ => {}
+    }
+    back(&settings_url(&loaded.community), result.map(|_| ()))
 }
 
 pub async fn upload_photo(

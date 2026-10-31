@@ -1,0 +1,32 @@
+{% extends "base.html" %} {% block content %}
+<section class="box content report-form">
+    <h1>Report</h1>
+    {% if done %}
+    <p class="saved">Thanks. The site's moderators will look at your report. The person you reported isn't told who reported them.</p>
+    <p><a href="javascript:history.go(-2)" class="button">Back</a></p>
+    {% else %}
+    <div class="report-target">
+        <strong>{{ target_label }}</strong>
+        {% if !excerpt.is_empty() %}<p class="report-excerpt">{{ excerpt }}</p>{% endif %}
+    </div>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+    <form action="/report" method="post">
+        <input type="hidden" name="{{ target_field.0 }}" value="{{ target_field.1 }}" />
+        <fieldset class="report-reasons">
+            <legend>What's wrong?</legend>
+            {% for reason in reasons %}
+            <label><input type="radio" name="reason" value="{{ reason.as_str() }}" required /> {{ reason.label() }}</label>
+            {% endfor %}
+        </fieldset>
+        <label for="report-comment">Anything the moderators should know? (optional)</label>
+        <textarea id="report-comment" name="details" rows="4" maxlength="{{ comment_max_chars }}"></textarea>
+        <div class="report-actions">
+            <a href="javascript:history.back()" class="button">Cancel</a>
+            <button type="submit" class="button primary">Send the report</button>
+        </div>
+    </form>
+    {% endif %}
+</section>
+{% endblock %}

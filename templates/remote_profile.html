@@ -1,0 +1,19 @@
+{% extends "base.html" %} {% import "macros/post.html" as posts_ui %} {% import "macros/account.html" as accounts %} {% block content %}
+<section class="box content account-card">
+    {% call accounts::identity(account.author) %}{% endcall %}
+    {% if !account.summary.is_empty() %}<p class="profile-bio">{{ account.summary }}</p>{% endif %}
+    <p class="post-username">An account of {{ account.author.host }}. <a href="{{ account.author.external_url }}" rel="nofollow noopener">See it on its server</a></p>
+    {% if layout.viewer.is_some() %}
+    <div class="profile-actions">
+        {% call accounts::follow_button(account, return_to) %}{% endcall %}
+        <form action="/messenger/remote/{{ account.author.id }}" method="post">
+            <button type="submit" class="button">Message</button>
+        </form>
+        <a href="/report?remote={{ account.author.id }}" class="button report-button" title="Report this account to the moderators">Report</a>
+    </div>
+    {% endif %}
+</section>
+<div class="flex center vertical full-width posts">
+    {% call posts_ui::post_list(posts, "No post of this account is stored here yet. Follow it to get its new posts.", layout.viewer.is_some(), return_to, false) %}{% endcall %}
+</div>
+{% endblock %}

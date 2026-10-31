@@ -6,6 +6,7 @@ use sqlx::{
 
 use crate::entities::{
     author::{Author, remote_author_columns},
+    media::{self, Attachment},
     post::{self, BodyError, post_visible},
     schema::{Column, Index, Table},
     user::user_columns,
@@ -34,11 +35,15 @@ pub const TABLE: Table = Table {
             .nullable()
             .references("comments(id) ON DELETE CASCADE"),
         Column::new("body", "TEXT"),
+        Column::new("sensitive", "BOOLEAN").default("FALSE"),
         Column::new("created_at", "TIMESTAMPTZ").default("NOW()"),
         Column::new("updated_at", "TIMESTAMPTZ").default("NOW()"),
+        // Last edit by its author, shown as "edited".
+        Column::new("edited_at", "TIMESTAMPTZ").nullable(),
     ],
     indexes: &[
         Index::new("comments_post_created_at_idx", "post_id, created_at"),
+        Index::new("comments_user_idx", "user_id, created_at DESC"),
         Index::unique("comments_ap_id_idx", "ap_id"),
     ],
 };
@@ -55,16 +60,20 @@ pub const LIKES_TABLE: Table = Table {
 };
 
 /// Columns read by `Comment::from_row`, with the joins they need: the
-/// comment as `c`, its author as `u`. `$liked` is the SQL telling whether the
-/// viewer liked it. A macro so it can be used in `concat!`.
+/// comment as `c`, its author as `u`. `$liked` and `$own` are the SQL telling
+/// whether the viewer liked and wrote it. A macro so it can be used in `concat!`.
 macro_rules! comment_select {
-    ($liked:literal) => {
+    ($liked:literal, $own:literal) => {
         concat!(
-            "SELECT c.id AS comment_id, c.body, c.created_at AS commented_at, c.post_id, c.ap_id,
-                    c.parent_id, COALESCE(pu.username, pra.username) AS parent_author,
-                    (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count, ",
+            "SELECT c.id AS comment_id, c.body, c.sensitive, c.created_at AS commented_at, c.edited_at,
+                    c.post_id, c.ap_id, c.parent_id, COALESCE(pu.username, pra.username) AS parent_author,
+                    (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id)
+                    + (SELECT COUNT(*) FROM remote_reactions rl WHERE rl.comment_id = c.id AND rl.kind = 'like')
+                    AS like_count, ",
             $liked,
             " AS liked, ",
+            $own,
+            " AS is_own, ",
             user_columns!("u."),
             ", ",
             remote_author_columns!(),
@@ -81,7 +90,9 @@ macro_rules! comment_select {
 pub struct Comment {
     pub id: i64,
     pub body: String,
+    pub sensitive: bool,
     pub created_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
     pub author: Author,
     /// ActivityPub id, for replies received from other servers.
     pub ap_id: Option<String>,
@@ -91,6 +102,10 @@ pub struct Comment {
     pub like_count: i64,
     /// Whether the viewer liked it, always `false` for visitors.
     pub liked: bool,
+    /// Whether the viewer wrote it.
+    pub is_own: bool,
+    /// Media of comments received from other servers.
+    pub attachments: Vec<Attachment>,
 }
 
 impl Comment {
@@ -98,14 +113,27 @@ impl Comment {
         Ok(Self {
             id: row.try_get("comment_id")?,
             body: row.try_get("body")?,
+            sensitive: row.try_get("sensitive")?,
             created_at: row.try_get("commented_at")?,
+            edited_at: row.try_get("edited_at")?,
             author: Author::from_row(row)?,
             ap_id: row.try_get("ap_id")?,
             parent_id: row.try_get("parent_id")?,
             parent_author: row.try_get("parent_author")?,
             like_count: row.try_get("like_count")?,
             liked: row.try_get("liked")?,
+            is_own: row.try_get("is_own")?,
+            attachments: Vec::new(),
         })
+    }
+
+    pub fn edited_at_iso(&self) -> Option<String> {
+        self.edited_at.as_ref().map(post::time_iso)
+    }
+
+    /// The text as HTML, with clickable addresses, see `linkify`.
+    pub fn body_html(&self) -> String {
+        crate::linkify::to_html(&self.body)
     }
 
     pub fn created_at_iso(&self) -> String {
@@ -144,6 +172,11 @@ impl ProfileComment {
             post_excerpt: row.try_get("post_excerpt")?,
             post_truncated: row.try_get("post_truncated")?,
         })
+    }
+
+    /// The text as HTML, with clickable addresses, see `linkify`.
+    pub fn body_html(&self) -> String {
+        crate::linkify::to_html(&self.body)
     }
 
     pub fn created_at_iso(&self) -> String {
@@ -223,6 +256,7 @@ pub async fn parent_author(pool: &PgPool, post_id: i64, comment_id: i64) -> Resu
 
 /// A reply received from another server. Returns `None` when a comment with
 /// this ActivityPub id is already stored.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_remote(
     pool: &PgPool,
     post_id: i64,
@@ -230,11 +264,12 @@ pub async fn create_remote(
     parent_id: Option<i64>,
     ap_id: &str,
     body: &str,
+    sensitive: bool,
     published: Option<DateTime<Utc>>,
 ) -> Result<Option<i64>, sqlx::Error> {
     sqlx::query_scalar(
-        "INSERT INTO comments (post_id, remote_actor_id, parent_id, ap_id, body, created_at)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()))
+        "INSERT INTO comments (post_id, remote_actor_id, parent_id, ap_id, body, created_at, sensitive)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()), $7)
          ON CONFLICT (ap_id) DO NOTHING
          RETURNING id",
     )
@@ -244,8 +279,101 @@ pub async fn create_remote(
     .bind(ap_id)
     .bind(body)
     .bind(published)
+    .bind(sensitive)
     .fetch_optional(pool)
     .await
+}
+
+/// Who may change a comment: its post, and its local author (`None` for a
+/// comment of another server).
+pub struct Owners {
+    pub post_id: i64,
+    pub author_id: Option<i32>,
+}
+
+pub async fn owners(pool: &PgPool, comment_id: i64) -> Result<Option<Owners>, sqlx::Error> {
+    sqlx::query("SELECT post_id, user_id FROM comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_optional(pool)
+        .await?
+        .map(|row| {
+            Ok(Owners {
+                post_id: row.try_get("post_id")?,
+                author_id: row.try_get("user_id")?,
+            })
+        })
+        .transpose()
+}
+
+/// The text of a comment, to edit it.
+pub async fn body_of(pool: &PgPool, comment_id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT body FROM comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Changes the text of the user's own comment. Returns `false` when it isn't theirs.
+pub async fn update_own(pool: &PgPool, comment_id: i64, user_id: i32, body: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query(
+        "UPDATE comments SET body = $3, edited_at = NOW(), updated_at = NOW() WHERE id = $1 AND user_id = $2",
+    )
+    .bind(comment_id)
+    .bind(user_id)
+    .bind(body)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0)
+}
+
+/// Deletes a comment and the replies below it.
+pub async fn delete(pool: &PgPool, comment_id: i64) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM comments WHERE id = $1")
+        .bind(comment_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
+}
+
+/// Comments written here among a comment and the replies below it, at any
+/// depth: they are deleted with it, other servers are told.
+pub async fn local_thread(pool: &PgPool, comment_id: i64) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "WITH RECURSIVE thread AS (
+            SELECT id, user_id FROM comments WHERE id = $1
+            UNION
+            SELECT c.id, c.user_id FROM comments c JOIN thread t ON c.parent_id = t.id
+         )
+         SELECT id FROM thread WHERE user_id IS NOT NULL",
+    )
+    .bind(comment_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Comments written here on a post: deleted with it, other servers are told.
+pub async fn local_ids_of_post(pool: &PgPool, post_id: i64) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT id FROM comments WHERE post_id = $1 AND user_id IS NOT NULL")
+        .bind(post_id)
+        .fetch_all(pool)
+        .await
+}
+
+async fn with_attachments(pool: &PgPool, mut comments: Vec<Comment>) -> Result<Vec<Comment>, sqlx::Error> {
+    let remote: Vec<i64> = comments
+        .iter()
+        .filter(|comment| comment.author.is_remote())
+        .map(|comment| comment.id)
+        .collect();
+    let mut attachments = media::for_comments(pool, &remote).await?;
+    for comment in &mut comments {
+        if let Some(found) = attachments.remove(&comment.id) {
+            comment.attachments = found;
+        }
+    }
+    Ok(comments)
 }
 
 /// Local id and post of a comment from its ActivityPub id, for one received.
@@ -261,7 +389,7 @@ pub async fn find_by_ap_id(pool: &PgPool, ap_id: &str) -> Result<Option<(i64, i6
 /// what other Fediverse servers may see.
 pub async fn find_public(pool: &PgPool, comment_id: i64) -> Result<Option<(Comment, i64)>, sqlx::Error> {
     sqlx::query(concat!(
-        comment_select!("FALSE"),
+        comment_select!("FALSE", "FALSE"),
         " JOIN posts p ON p.id = c.post_id
           LEFT JOIN communities cm ON cm.id = p.community_id
          WHERE c.id = $2 AND ",
@@ -277,11 +405,27 @@ pub async fn find_public(pool: &PgPool, comment_id: i64) -> Result<Option<(Comme
     .transpose()
 }
 
+/// A comment of any post, with its post id: for the federation of a comment
+/// on a followers-only post, after checking the post with
+/// `post::find_federable`.
+pub async fn find_any(pool: &PgPool, comment_id: i64) -> Result<Option<(Comment, i64)>, sqlx::Error> {
+    sqlx::query(concat!(comment_select!("FALSE", "FALSE"), " WHERE c.id = $1"))
+        .bind(comment_id)
+        .fetch_optional(pool)
+        .await?
+        .as_ref()
+        .map(|row| Ok((Comment::from_row(row)?, row.try_get("post_id")?)))
+        .transpose()
+}
+
 /// Comments of a post, oldest first like a conversation, as seen by `viewer_id`.
 pub async fn for_post(pool: &PgPool, post_id: i64, viewer_id: Option<i32>) -> Result<Vec<Comment>, sqlx::Error> {
-    sqlx::query(concat!(
-        comment_select!("EXISTS (SELECT 1 FROM comment_likes vl WHERE vl.comment_id = c.id AND vl.user_id = $2)"),
-        " WHERE c.post_id = $1
+    let comments = sqlx::query(concat!(
+        comment_select!(
+            "EXISTS (SELECT 1 FROM comment_likes vl WHERE vl.comment_id = c.id AND vl.user_id = $2)",
+            "COALESCE(c.user_id = $2, FALSE)"
+        ),
+        " WHERE c.post_id = $1 AND u.suspended_at IS NULL
          ORDER BY c.created_at, c.id"
     ))
     .bind(post_id)
@@ -290,7 +434,8 @@ pub async fn for_post(pool: &PgPool, post_id: i64, viewer_id: Option<i32>) -> Re
     .await?
     .iter()
     .map(Comment::from_row)
-    .collect()
+    .collect::<Result<Vec<_>, _>>()?;
+    with_attachments(pool, comments).await
 }
 
 /// The post of a comment, to check the user can see it before liking.

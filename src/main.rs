@@ -13,8 +13,10 @@ use tower_sessions::{
 mod API;
 mod entities;
 mod handlers;
+mod linkify;
 mod mail;
 mod pages;
+mod preview;
 mod settings;
 use handlers::user;
 use settings::Config;
@@ -33,6 +35,10 @@ pub struct AppState {
     pub public_base_url: String,
     /// `None` when federation is off (`FEDERATION=false`) or there is no database.
     pub federation: Option<Arc<API::Federation>>,
+    /// Requests to other websites: the media proxy and link previews.
+    pub web: Arc<API::Web>,
+    /// Wakes the link previews when a post is written, see `preview`.
+    pub previews: Arc<tokio::sync::Notify>,
     /// Open pages waiting for their unread count, see `handlers::notification`.
     pub live_notifications: Arc<handlers::notification::LiveUsers>,
     /// Where sessions live: long-lived connections reread them from here to
@@ -110,7 +116,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(count) => tracing::info!("deleted {} expired password reset links", count),
             Err(err) => tracing::warn!("failed to delete expired password reset links: {}", err),
         }
+        // Avatars saved before the media proxy existed.
+        if let Err(err) = entities::media::register_known_avatars(pool).await {
+            tracing::warn!("failed to register avatars for the media proxy: {}", err);
+        }
     }
+
+    // Old cached media of other servers, once a day.
+    tokio::spawn(async {
+        loop {
+            handlers::media::clean_cache().await;
+            tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+        }
+    });
 
     // A wrong SMTP setting stops the server: better than discovering it when
     // someone needs to reset their password. An unreachable server only warns,
@@ -157,6 +175,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => None,
     };
 
+    let web = Arc::new(
+        API::Web::new(&config.public_base_url, config.federation_allow_insecure).map_err(io_error_from_string)?,
+    );
+    let previews = Arc::new(tokio::sync::Notify::new());
+    if let Some(pool) = &pool {
+        tokio::spawn(preview::run(web.clone(), pool.clone(), previews.clone()));
+    }
+
     let live_notifications = Arc::new(handlers::notification::LiveUsers::default());
     if let Some(pool) = &pool {
         tokio::spawn(handlers::notification::listen(pool.clone(), live_notifications.clone()));
@@ -170,6 +196,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mailer,
         public_base_url: config.public_base_url.clone(),
         federation,
+        web,
+        previews,
         live_notifications,
         session_store: session_store.clone(),
     };

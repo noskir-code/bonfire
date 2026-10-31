@@ -5,6 +5,18 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{% block title %}{{ title }} - Tison{% endblock %}</title>
         <link rel="shortcut icon" href="/public/favicon.ico" type="image/x-icon">
+        {# The theme chosen with the menu's button (see system.js), applied
+           before the page is drawn so it never flashes in the other one. #}
+        <script>
+            // Tells the CSS JavaScript runs: the phone menu can be folded.
+            document.documentElement.classList.add("js");
+            try {
+                const theme = localStorage.getItem("tison-theme");
+                if (theme === "light" || theme === "dark") {
+                    document.documentElement.dataset.theme = theme;
+                }
+            } catch {}
+        </script>
         {% block stylesheets %}
         <link rel="stylesheet" href="/assets/style.css" />
         {% endblock %}
@@ -17,7 +29,16 @@
     </head>
     <body>
         <div class="grid horizontal page end fixed full-width">
-            <div class="flex full height center side infos vertical">
+            {# On phones only (see style.css): opens the menu, which slides in
+               from the left. Shown by the `js` class: it needs JavaScript. #}
+            <button type="button" class="menu-toggle" aria-controls="site-menu" aria-expanded="false" aria-label="Open the menu" data-menu-toggle>
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                    <path d="M4 6.5h16M4 12h16M4 17.5h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                </svg>
+            </button>
+            <a href="/" class="mobile-brand"><img src="/public/logo.png" alt="" class="logo"><span>Tison</span></a>
+            <div class="menu-backdrop" data-menu-close></div>
+            <div class="flex full height center side infos vertical" id="site-menu">
                 <header><img src="/public/logo.png" alt="Logo" class="logo"><div>Tison</div></header>
                 <nav>
                     {% if let Some(viewer) = layout.viewer %}
@@ -33,7 +54,15 @@
                     <a href="/">Home</a>
                     <a href="/your-feed">Feed</a>
                     <a href="/communities">Communities</a>
-                    <a href="/messenger">Messenger</a>
+                    <a href="/messenger" class="flex center" data-messenger>
+                        Messenger
+                        {# Conversations with unread messages, updated live by assets/system.js. #}
+                        {% if layout.viewer.is_some() %}
+                        <span class="badge" data-unread-messages{% if layout.unread_messages == 0 %} hidden{% endif %}>
+                            {{ layout.unread_messages_label() }}<span class="visually-hidden"> unread</span>
+                        </span>
+                        {% endif %}
+                    </a>
                     <a href="/notifications" class="flex center" data-notifications>
                         Notifications
                         {# Signed in only, updated live by assets/system.js, hidden at 0. #}
@@ -43,11 +72,28 @@
                         </span>
                         {% endif %}
                     </a>
+                    {% if let Some(viewer) = layout.viewer %}{% if viewer.is_staff() %}
+                    <a href="/moderation" class="flex center">
+                        Moderation
+                        {% if layout.open_reports > 0 %}<span class="badge">{{ layout.open_reports }}<span class="visually-hidden"> open reports</span></span>{% endif %}
+                    </a>
+                    {% endif %}{% endif %}
                     <a href="/settings">Settings</a>
+                    {# Shown by system.js: switching needs JavaScript. #}
+                    <button type="button" class="theme-toggle" data-theme-toggle hidden>
+                        <svg class="moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                        </svg>
+                        <svg class="sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+                            <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                        </svg>
+                        <span data-theme-label>Dark mode</span>
+                    </button>
                 </nav>
                 <div class="flex bottom center vertical">
                     <!-- Versions -->
-                    <div>Tison Protocol &middot; v.0.1.29</div>
+                    <div>Tison Protocol &middot; v.0.2.42-alpha</div>
                     <div class="flex wrap space-around infos">
                         <a href="/terms-of-use">&bull;Terms of Use</a>
                         <a href="/privacy-policy">&bull;Privacy Policy</a>
@@ -56,29 +102,38 @@
                     </div>
                 </div>
             </div>
-            <div class="flex horizontal right">
+            <div class="flex horizontal right account-bar">
                 {% if let Some(viewer) = layout.viewer %}
-                <a href="/user/{{ viewer.username }}" class="flex horizontal center">
-                    <div>{{ viewer.username }}</div>
+                <a href="/user/{{ viewer.username }}" class="button">
                     {% if let Some(url) = viewer.photo_url %}
                     <img src="{{ url }}" alt="" class="nav-avatar" />
                     {% else %}
                     <span class="nav-avatar placeholder" aria-hidden="true">{{ viewer.initial() }}</span>
                     {% endif %}
+                    <span>{{ viewer.username }}</span>
                 </a>
                 <form action="/logout" method="post">
-                    <button type="submit">Logout</button>
+                    <button type="submit" class="button">Logout</button>
                 </form>
                 {% else %}
-                <div class="flex horizontal"><a href="/login" class="page-link">Login</a><a href="/register" class="page-link">Register</a></div>
+                <a href="/login" class="button">Login</a>
+                <a href="/register" class="button primary">Register</a>
                 {% endif %}
             </div>
         </div>
-        <div class="flex center full-width vertical content margin">
-            <div>
-                <input type="search" placeholder="Search...">
-                <button>Mag</button>
-            </div>
+        <div class="flex center full-width vertical content margin page-content">
+            {# People and communities here, or @name@server for the Fediverse,
+               see handlers/search.rs. #}
+            <form action="/search" method="get" class="search-field site-search" role="search">
+                <label for="site-search" class="visually-hidden">Search</label>
+                <input id="site-search" type="search" name="q" value="{{ layout.search }}" placeholder="Search people, communities, or @name@server" required />
+                <button type="submit" class="button" aria-label="Search">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                        <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2" />
+                        <line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </form>
             {% block content %}
             {% endblock %}
         </div>

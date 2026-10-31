@@ -1,0 +1,57 @@
+{% extends "base.html" %} {% import "macros/account.html" as accounts %} {% block content %}
+<section class="box content search-results">
+    {% if query.is_empty() %}
+    <h1>Search</h1>
+    {% else %}
+    <h1>Results for “{{ query }}”</h1>
+    {% endif %}
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% endif %}
+
+    {% if let Some(account) = found %}
+    <div class="account-card">
+        {% call accounts::identity(account.author) %}{% endcall %}
+        {% if !account.summary.is_empty() %}<p class="profile-bio">{{ account.summary }}</p>{% endif %}
+        {% call accounts::follow_button(account, return_to) %}{% endcall %}
+    </div>
+    {% else if !query.is_empty() && error.is_none() %}
+    <h2>People</h2>
+    <ul class="account-list">
+        {% for user in users %}
+        <li>{% call accounts::user_identity(user) %}{% endcall %}</li>
+        {% else %}
+        <li class="empty">Nobody found.</li>
+        {% endfor %}
+    </ul>
+
+    <h2>Communities</h2>
+    <ul class="account-list">
+        {% for community in communities %}
+        <li>
+            <a href="/community/{{ community.slug }}" class="post-author">
+                {% if let Some(url) = community.photo_url %}
+                <img src="{{ url }}" alt="" class="nav-avatar" />
+                {% else %}
+                <span class="nav-avatar placeholder" aria-hidden="true">{{ community.initial() }}</span>
+                {% endif %}
+                <span>
+                    <strong>{{ community.name }}</strong>
+                    <span class="post-username">{{ community.member_count }} member{% if community.member_count != 1 %}s{% endif %}{% if !community.is_public() %} · Private{% endif %}</span>
+                </span>
+            </a>
+        </li>
+        {% else %}
+        <li class="empty">No community found.</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if fediverse %}
+    <p class="post-username search-hint">
+        To follow someone on Mastodon, Misskey, Pixelfed and other servers, search their address, like <strong>@name@mastodon.social</strong>, or paste the link of their profile.
+        {% if let Some(handle) = own_handle %}There, you are <strong>{{ handle }}</strong>.{% endif %}
+    </p>
+    {% endif %}
+</section>
+{% endblock %}

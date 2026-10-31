@@ -3,18 +3,16 @@
 {% macro notification_item(notification) %}
 <li class="notification{% if notification.unread %} unread{% endif %}" id="notification-{{ notification.id }}" data-notification-id="{{ notification.id }}">
     <a href="/notifications/{{ notification.id }}/open" class="notification-link">
-        {% if let Some(actor) = notification.actor %}
-        {% if let Some(url) = actor.photo_url %}
+        {% if let Some(url) = notification.actor_photo() %}
         <img src="{{ url }}" alt="" class="nav-avatar" />
-        {% else %}
+        {% else if let Some(actor) = notification.actor %}
         <span class="nav-avatar placeholder" aria-hidden="true">{{ actor.initial() }}</span>
-        {% endif %}
         {% else %}
         <span class="nav-avatar placeholder" aria-hidden="true">@</span>
         {% endif %}
         <span class="notification-text">
             <span>
-                <strong>{{ notification.actor_name() }}</strong> {{ notification.kind.action() }}
+                <strong>{{ notification.actor_name() }}</strong> {{ notification.kind.action() }}{% if let Some(community) = notification.community %} <strong>{{ community.name }}</strong>{% endif %}
                 <span class="visually-hidden" data-unread-label{% if !notification.unread %} hidden{% endif %}>(new)</span>
             </span>
             {% if let Some(comment) = notification.comment_excerpt %}

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use askama::Template;
 use axum::{
     Form,
-    extract::{Query, State},
+    extract::{Path, Query, State},
+    http::StatusCode,
     response::{IntoResponse, Redirect, Response},
 };
 use tower_sessions::Session;
@@ -13,7 +14,7 @@ use crate::{
     entities::post::{self, BODY_MAX_CHARS, BodyError, Post, Visibility},
     handlers::{
         notifier,
-        system::{Layout, render_template},
+        system::{Layout, error_page, local_path, render_template},
         user::signed_in_user,
     },
 };
@@ -174,7 +175,8 @@ pub async fn home_page(
     })
 }
 
-/// The signed-in user's feed. Until following exists, it holds their own posts.
+/// The signed-in user's feed: their posts, and those of the accounts they
+/// follow on other servers.
 pub async fn feed_page(
     State(state): State<AppState>,
     session: Session,
@@ -185,7 +187,7 @@ pub async fn feed_page(
     else {
         return Redirect::to("/login").into_response();
     };
-    let posts = or_empty(post::by_author(pool, viewer_id, Some(viewer_id)).await);
+    let posts = or_empty(post::feed(pool, viewer_id).await);
     render_template(&FeedTemplate {
         title: "Feed".to_string(),
         layout,
@@ -222,10 +224,131 @@ pub async fn create_post(
 
     if let Ok(post_id) = &result {
         notifier::post_created(&state, &pool, *post_id).await;
+        state.previews.notify_one();
     }
     let location = match result {
         Ok(_) => page.url().to_string(),
         Err(error) => format!("{}?error={}", page.url(), error.code()),
     };
     Redirect::to(&location).into_response()
+}
+
+/// The page editing a post or a comment.
+#[derive(Template)]
+#[template(path = "edit.html")]
+pub struct EditTemplate {
+    pub title: String,
+    pub layout: Layout,
+    pub action: String,
+    pub back: String,
+    pub body: String,
+    pub body_max_chars: usize,
+    pub error: Option<String>,
+    /// Other servers may have it: they get the edit.
+    pub federated: bool,
+}
+
+/// The user's own post, written here.
+async fn own_post(state: &AppState, session: &Session, post_id: i64) -> Result<(sqlx::PgPool, crate::entities::user::User, Post), Response> {
+    let (pool, me) = signed_in_user(state, session).await?;
+    match post::find(&pool, post_id, Some(me.id)).await {
+        Ok(Some(post)) if post.can_edit() => Ok((pool, me, post)),
+        Ok(_) => Err(error_page(Layout::load(state, session).await, StatusCode::NOT_FOUND, "This post does not exist or isn't yours.")),
+        Err(err) => {
+            tracing::error!("failed to load post {}: {}", post_id, err);
+            Err(error_page(Layout::load(state, session).await, StatusCode::INTERNAL_SERVER_ERROR, "Failed to load this post."))
+        }
+    }
+}
+
+pub async fn edit_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(post_id): Path<i64>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let (_, _, post) = match own_post(&state, &session, post_id).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    render_template(&EditTemplate {
+        title: "Edit the post".to_string(),
+        layout: Layout::load(&state, &session).await,
+        action: format!("/posts/{post_id}/edit"),
+        back: format!("/posts/{post_id}"),
+        body_max_chars: BODY_MAX_CHARS,
+        error: query
+            .get("error")
+            .and_then(|code| PostError::from_code(code))
+            .map(PostError::message),
+        federated: state.federation.is_some() && post.visibility == Visibility::Public,
+        body: post.body,
+    })
+}
+
+pub async fn update_post(
+    State(state): State<AppState>,
+    session: Session,
+    Path(post_id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let (pool, me, _) = match own_post(&state, &session, post_id).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    let result = async {
+        let body = post::validate_body(form.get("body").map(String::as_str).unwrap_or(""))?;
+        post::update_own(&pool, post_id, me.id, &body).await.map_err(|err| {
+            tracing::error!("failed to update post {}: {}", post_id, err);
+            PostError::Server
+        })
+    }
+    .await;
+    match result {
+        Ok(_) => {
+            notifier::post_updated(&state, &pool, post_id).await;
+            state.previews.notify_one();
+            Redirect::to(&format!("/posts/{post_id}")).into_response()
+        }
+        Err(error) => Redirect::to(&format!("/posts/{post_id}/edit?error={}", error.code())).into_response(),
+    }
+}
+
+/// Deletes the user's own post, or any post for the site's staff.
+pub async fn delete_post(
+    State(state): State<AppState>,
+    session: Session,
+    Path(post_id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let (pool, me) = match signed_in_user(&state, &session).await {
+        Ok(signed_in) => signed_in,
+        Err(response) => return response,
+    };
+    let allowed = match post::find(&pool, post_id, Some(me.id)).await {
+        Ok(Some(post)) => post.can_edit() || me.is_staff(),
+        Ok(None) => false,
+        Err(err) => {
+            tracing::error!("failed to load post {}: {}", post_id, err);
+            false
+        }
+    };
+    if !allowed {
+        return error_page(Layout::load(&state, &session).await, StatusCode::NOT_FOUND, "This post does not exist or isn't yours.");
+    }
+    let deletions = notifier::post_deleting(&state, &pool, post_id).await;
+    match post::delete(&pool, post_id).await {
+        Ok(_) => {
+            deletions.send(&state, &pool).await;
+            tracing::info!("@{} deleted post {}", me.username, post_id);
+            // Not back to the post's own page, which is gone.
+            let back = local_path(form.get("return"), "/your-feed");
+            let back = if back.starts_with(&format!("/posts/{post_id}")) { "/your-feed".to_string() } else { back };
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => {
+            tracing::error!("failed to delete post {}: {}", post_id, err);
+            error_page(Layout::load(&state, &session).await, StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong, try again later.")
+        }
+    }
 }

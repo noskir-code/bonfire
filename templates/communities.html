@@ -19,12 +19,17 @@
 </li>
 {% endmacro %}
 {% block content %}
-<section class="box content communities">
+<section class="box content profile-edit">
     <h1>Communities</h1>
-    <form action="/communities" method="get" class="community-search" role="search">
+    <form action="/communities" method="get" class="search-field community-search" role="search">
         <label for="community-search" class="visually-hidden">Search communities</label>
-        <input id="community-search" type="search" name="q" value="{{ search }}" placeholder="Search by name..." />
-        <button type="submit" class="button">Search</button>
+        <input id="community-search" type="search" name="q" value="{{ search }}" placeholder="Search communities by name..." />
+        <button type="submit" class="button" aria-label="Search">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2" />
+                <line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+            </svg>
+        </button>
     </form>
 
     {% if search.is_empty() && !joined.is_empty() %}

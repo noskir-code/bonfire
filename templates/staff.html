@@ -1,0 +1,40 @@
+{% extends "base.html" %} {% import "macros/account.html" as accounts %} {% block content %}
+<section class="box content moderation staff">
+    <div class="moderation-title">
+        <h1>Staff</h1>
+        <a href="/moderation" class="button">Reports</a>
+    </div>
+    <p class="post-username">
+        The <strong>Creator</strong> made this site and names the moderators.
+        <strong>Moderators</strong> handle reports: they delete what breaks the rules, suspend and block accounts.
+    </p>
+    {% if let Some(message) = error %}
+    <p class="error">{{ message }}</p>
+    {% else if saved %}
+    <p class="saved">Saved.</p>
+    {% endif %}
+
+    <ul class="account-list">
+        {% for member in staff %}
+        <li>
+            {% call accounts::user_identity(member) %}{% endcall %}
+            {% if let Some(badge) = member.role.badge() %}<span class="role-badge {{ member.role.as_str() }}">{{ badge }}</span>{% endif %}
+            {% if can_manage && member.role == Role::Moderator %}
+            <form action="/moderation/staff/{{ member.id }}/remove" method="post" class="inline" data-confirm="Remove @{{ member.username }} from the moderators?" data-confirm-label="Remove">
+                <button type="submit" class="action danger">Remove</button>
+            </form>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+
+    {% if can_manage %}
+    <h2>Add a moderator</h2>
+    <form action="/moderation/staff" method="post" class="search-field staff-add">
+        <label for="staff-username" class="visually-hidden">Username</label>
+        <input id="staff-username" type="text" name="username" placeholder="Username" required autocomplete="off" />
+        <button type="submit" class="button primary">Add</button>
+    </form>
+    {% endif %}
+</section>
+{% endblock %}
